@@ -3,6 +3,7 @@ import type { ILocale } from './i18n/types';
 import type { ITocItem } from './state/getTOC';
 import type { TState } from './state/types';
 import type { IMuyaOptions } from './types';
+import Format from './block/base/format';
 import {
     CLASS_NAMES,
     MUYA_DEFAULT_OPTIONS,
@@ -172,6 +173,109 @@ export class Muya {
 
     selectAll() {
         this.editor.selection.selectAll();
+    }
+
+    /**
+     * Toggle an inline format on the current selection.
+     * @param type One of strong/em/u/del/inline_code/link/image/inline_math/
+     * sub/sup/mark/clear (and html_tag aliases). No-op when the selection is
+     * not inside a single formattable block.
+     */
+    format(type: string) {
+        const { selection } = this.editor;
+        const sel = selection.getSelection();
+        if (!sel)
+            return;
+
+        const {
+            anchor,
+            focus,
+            anchorBlock,
+            anchorPath,
+            focusBlock,
+            focusPath,
+            isSelectionInSameBlock,
+        } = sel;
+
+        if (!isSelectionInSameBlock || !(anchorBlock instanceof Format))
+            return;
+
+        // Restore the selection before applying the format, mirroring the
+        // inline format toolbar — the menu/IPC round-trip can drop the live
+        // DOM selection.
+        selection.setSelection({
+            anchor,
+            focus,
+            anchorBlock,
+            anchorPath,
+            focusBlock,
+            focusPath,
+        });
+
+        anchorBlock.format(type);
+    }
+
+    /**
+     * Return the current selection, or null when the editor has no selection.
+     */
+    getSelection() {
+        return this.editor.selection.getSelection();
+    }
+
+    /**
+     * Whether the editor (or one of its descendants) currently holds focus.
+     */
+    hasFocus() {
+        const { activeElement } = document;
+
+        return this.domNode === activeElement || this.domNode.contains(activeElement);
+    }
+
+    /**
+     * Blur the editor (mirrors marktext muyajs `blur`). Always hides every
+     * floating tool and blurs the contenteditable node.
+     * @param isRemoveAllRange Remove all native selection ranges.
+     * @param unSelect Clear the selected inline image so its toolbar/resize
+     * bar do not linger after the editor is blurred.
+     */
+    blur(isRemoveAllRange = false, unSelect = false) {
+        if (isRemoveAllRange)
+            document.getSelection()?.removeAllRanges();
+
+        if (unSelect)
+            this.editor.selection.selectedImage = null;
+
+        this.editor.activeContentBlock = null;
+        this.ui.hideAllFloatTools();
+        this.domNode.blur();
+    }
+
+    /**
+     * Hide every floating tool/menu (toolbars, pickers, front button, …).
+     */
+    hideAllFloatTools() {
+        this.ui.hideAllFloatTools();
+    }
+
+    /**
+     * Copy the current document as Markdown to the clipboard.
+     */
+    copyAsMarkdown() {
+        this.editor.clipboard.copyAsMarkdown();
+    }
+
+    /**
+     * Copy the current selection as rendered HTML to the clipboard.
+     */
+    copyAsHtml() {
+        this.editor.clipboard.copyAsHtml();
+    }
+
+    /**
+     * Paste the clipboard content as plain text at the current cursor.
+     */
+    pasteAsPlainText() {
+        this.editor.clipboard.pasteAsPlainText();
     }
 
     destroy() {
