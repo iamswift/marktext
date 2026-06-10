@@ -28,7 +28,7 @@ import {
 } from './selection/offsetCursor';
 import { getTOC } from './state/getTOC';
 import { isAnyListState, isAtxHeadingState } from './state/types';
-import { replaceBlockByLabel } from './ui/paragraphQuickInsertMenu/config';
+import { insertFrontMatterAtStart, replaceBlockByLabel } from './ui/paragraphQuickInsertMenu/config';
 import { Ui } from './ui/ui';
 import { deepClone } from './utils';
 import './assets/styles/blockSyntax.css';
@@ -896,6 +896,30 @@ export class Muya {
         if (!label)
             return;
 
+        // Front matter is only valid as the very first block of a document, so
+        // it is never an in-place replacement of the cursor block. Mirror legacy
+        // muyajs `handleFrontMatter`: idempotent no-op if the document already
+        // starts with front matter, otherwise prepend one at the top.
+        if (label === 'frontmatter') {
+            insertFrontMatterAtStart(this);
+            return;
+        }
+
+        // The plain `paragraph` menu item only converts the *leaf* block that
+        // directly wraps the cursor (heading, hr, …) back to a paragraph; it
+        // never touches the enclosing container. Mirror legacy muyajs
+        // (paragraphCtrl.js `case 'paragraph'`): there `parent = getParent(block)`
+        // is the cursor's immediate leaf and the conversion is a no-op only when
+        // `parent.type === 'p'` (already a paragraph) — otherwise it replaces
+        // just that leaf. Operating on the leaf (not the outermost container)
+        // means a heading inside a list item still converts while the list stays
+        // intact, and avoids the original G4 data loss where routing `paragraph`
+        // to the *whole* list/blockquote collapsed every item/line into a single
+        // paragraph built from the first content's text. `reset-to-paragraph`
+        // remains the explicit "unwrap the container" command (handled above).
+        if (label === 'paragraph')
+            return this._convertLeafToParagraph();
+
         if (label.endsWith('-list') && isAnyListState(block.getState())) {
             // Selecting the active list type toggles the list off (unwrap each
             // item back into paragraphs); a different type converts in place,
@@ -940,6 +964,27 @@ export class Muya {
             muya: this,
             label: 'paragraph',
             text: this._blockLeadingText(block),
+        });
+    }
+
+    /**
+     * Convert the *leaf* block that directly wraps the cursor (the immediate
+     * parent of the active content) to a plain paragraph. No-op when that leaf
+     * is already a paragraph — mirroring legacy muyajs `case 'paragraph'`
+     * (`parent.type === 'p'` returned early). Because it targets the leaf rather
+     * than the outermost container, a heading inside a list item / blockquote
+     * converts to a paragraph while leaving the surrounding list/quote intact.
+     */
+    private _convertLeafToParagraph() {
+        const leaf = this._immediateBlockAtCursor();
+        if (!leaf || leaf.blockName === 'paragraph')
+            return;
+
+        replaceBlockByLabel({
+            block: leaf,
+            muya: this,
+            label: 'paragraph',
+            text: this._blockLeadingText(leaf),
         });
     }
 

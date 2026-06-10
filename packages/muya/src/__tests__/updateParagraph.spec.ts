@@ -180,4 +180,76 @@ describe('muya.updateParagraph()', () => {
         expect(firstBlock(muya).name).toBe('paragraph');
         expect(muya.getMarkdown()).toContain('keep me');
     });
+
+    // G4 regression: the plain 'paragraph' menu item must not collapse a list /
+    // blockquote into a single paragraph built from the first item's text. Legacy
+    // muyajs treated this as a no-op inside a container; the migrated engine used
+    // to fall through to replaceBlockByLabel on the whole container and silently
+    // lose every item but the first.
+    it('\'paragraph\' on a 2-item bullet list is a no-op, preserving both items', async () => {
+        const muya = bootMuya('- one\n- two\n');
+        placeCursorOnFirstBlock(muya);
+        expect(firstBlock(muya).name).toBe('bullet-list');
+        muya.updateParagraph('paragraph');
+        await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+        const state = muya.getState();
+        expect(state.length).toBe(1);
+        expect(state[0].name).toBe('bullet-list');
+        const md = muya.getMarkdown();
+        expect(md).toContain('one');
+        expect(md).toContain('two');
+    });
+
+    it('\'paragraph\' on a 2-line blockquote is a no-op, preserving both lines', async () => {
+        const muya = bootMuya('> a\n>\n> b\n');
+        placeCursorOnFirstBlock(muya);
+        expect(firstBlock(muya).name).toBe('block-quote');
+        muya.updateParagraph('paragraph');
+        await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+        const state = muya.getState();
+        expect(state.length).toBe(1);
+        expect(state[0].name).toBe('block-quote');
+        const md = muya.getMarkdown();
+        expect(md).toContain('a');
+        expect(md).toContain('b');
+    });
+
+    it('\'paragraph\' still converts a leaf block (heading) back to a paragraph', async () => {
+        const muya = bootMuya('## a heading\n');
+        placeCursorOnFirstBlock(muya);
+        muya.updateParagraph('paragraph');
+        await vi.waitFor(() => {
+            expect(firstBlock(muya).name).toBe('paragraph');
+        });
+        expect(muya.getMarkdown()).toContain('a heading');
+    });
+
+    // G4 follow-up: the leaf — not the whole container — is the conversion
+    // target. A heading nested in a list item must convert to a paragraph in
+    // place, leaving the list (and the rest of its items) untouched. The earlier
+    // "no-op on any list/blockquote container" guard wrongly suppressed this.
+    it('\'paragraph\' converts a heading inside a list item, leaving the list intact', async () => {
+        const muya = bootMuya('- # heading in item\n- second item\n');
+        // Cursor lands on the heading's content inside the first list item.
+        placeCursorOnFirstBlock(muya);
+        expect(firstBlock(muya).name).toBe('bullet-list');
+
+        muya.updateParagraph('paragraph');
+
+        await vi.waitFor(() => {
+            const list = firstBlock(muya);
+            // The first item's heading became a paragraph...
+            expect(list.children[0].children[0].name).toBe('paragraph');
+        });
+
+        const list = firstBlock(muya);
+        // ...and the container is still a 2-item bullet list — nothing collapsed.
+        expect(list.name).toBe('bullet-list');
+        expect(list.children.length).toBe(2);
+        const md = muya.getMarkdown();
+        expect(md).toContain('heading in item');
+        expect(md).toContain('second item');
+        // The atx hash run is gone now that the heading is a plain paragraph.
+        expect(md).not.toContain('# heading in item');
+    });
 });
