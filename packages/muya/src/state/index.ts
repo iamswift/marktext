@@ -44,7 +44,11 @@ class JSONState {
 
     private _operationCache: JSONOpList[] = [];
 
-    private _isGoing = false;
+    // Handle of the scheduled deferred-op flush. Doubles as the "a flush is
+    // already scheduled" guard (non-null ⇒ batching in progress), and lets
+    // `setContent` cancel a pending batch that belongs to the outgoing
+    // document (#2938).
+    private _rafId: number | null = null;
 
     private _state: TState[] = [];
 
@@ -62,6 +66,16 @@ class JSONState {
     }
 
     setContent(content: TState[] | string) {
+        // A pending deferred-op batch belongs to the OUTGOING document. Applying
+        // it to the new content would corrupt it (or throw and leave the flush
+        // guard stuck, freezing all future edits). Drop the batch and cancel its
+        // scheduled flush before swapping the state (#2938).
+        if (this._rafId !== null) {
+            cancelAnimationFrame(this._rafId);
+            this._rafId = null;
+        }
+        this._operationCache = [];
+
         if (typeof content === 'object')
             this._setState(content);
         else
@@ -229,37 +243,52 @@ class JSONState {
     }
 
     private _emitStateChange() {
-        if (this._isGoing)
+        if (this._rafId !== null)
             return;
 
-        this._isGoing = true;
+        this._rafId = requestAnimationFrame(() => {
+            this._rafId = null;
+            this._flushOperationCache();
+        });
+    }
 
-        requestAnimationFrame(() => {
-            // Wrap compose in a lambda — `Array.prototype.reduce` passes
-            // (acc, current, index, array) to the callback, but
-            // `json1.type.compose` only accepts (op1, op2). Without the
-            // wrapper TS rejects the signature mismatch.
-            // `compose` returns JSONOp (= null | JSONOpList); when the cache
-            // contains at least one op the result is the composed list,
-            // never null. The reduce above runs only when _operationCache is
-            // non-empty (guarded by the requestAnimationFrame in
-            // `_emitStateChange`), and a non-empty cache always composes to
-            // a non-null op.
-            const op = this._operationCache.reduce(
-                (acc, curr) => json1.type.compose(acc, curr) as JSONOpList,
-            );
-            const prevDoc = this.getState();
-            this._apply(op);
-            // TODO: remove doc in future
-            const doc = this.getState();
-            this._muya.eventCenter.emit('json-change', {
-                op,
-                source: 'user',
-                prevDoc,
-                doc,
-            });
-            this._operationCache = [];
-            this._isGoing = false;
+    // Apply queued edits to the current document now instead of on the next
+    // frame. Lets a tab switch persist the outgoing tab's last keystroke before
+    // `setContent` replaces the document, otherwise that edit is lost (#2938).
+    flush() {
+        if (this._rafId === null)
+            return;
+
+        cancelAnimationFrame(this._rafId);
+        this._rafId = null;
+        this._flushOperationCache();
+    }
+
+    private _flushOperationCache() {
+        if (!this._operationCache.length)
+            return;
+
+        // Wrap compose in a lambda — `Array.prototype.reduce` passes
+        // (acc, current, index, array) to the callback, but
+        // `json1.type.compose` only accepts (op1, op2). Without the
+        // wrapper TS rejects the signature mismatch.
+        // `compose` returns JSONOp (= null | JSONOpList); a non-empty cache
+        // (guarded above) always composes to a non-null op.
+        const op = this._operationCache.reduce(
+            (acc, curr) => json1.type.compose(acc, curr) as JSONOpList,
+        );
+        const prevDoc = this.getState();
+        this._apply(op);
+        // TODO: remove doc in future
+        const doc = this.getState();
+        // Clear before emitting: a listener that edits synchronously then starts
+        // a fresh batch instead of mutating the one being flushed.
+        this._operationCache = [];
+        this._muya.eventCenter.emit('json-change', {
+            op,
+            source: 'user',
+            prevDoc,
+            doc,
         });
     }
 }
