@@ -1631,7 +1631,7 @@ class Format extends Content {
             start.offset += start.delta;
             end.offset += end.delta;
 
-            this.text = generator(tokens);
+            this.text = generator(tokens, true);
         }
         else if (currentFormats.length) {
             for (const token of currentFormats)
@@ -1639,7 +1639,7 @@ class Format extends Content {
 
             start.offset += start.delta;
             end.offset += end.delta;
-            this.text = generator(tokens);
+            this.text = generator(tokens, true);
         }
         else {
             if (currentNeighbors.length) {
@@ -1649,7 +1649,7 @@ class Format extends Content {
 
             start.offset += start.delta;
             end.offset += end.delta;
-            this.text = generator(tokens);
+            this.text = generator(tokens, true);
 
             this._addFormat(type, { start, end });
 
