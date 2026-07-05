@@ -10,6 +10,7 @@ import type {
     ITaskListState,
     TState,
 } from './types';
+import { firstWordOfInfo } from '../utils';
 import logger from '../utils/logger';
 import { lexBlock } from '../utils/marked';
 
@@ -415,10 +416,10 @@ export class MarkdownToState {
         trimUnnecessaryCodeBlockEmptyLines: boolean,
         fenceLength?: number,
     ): TState {
-        // GH#697, markedjs#1387 — strip everything past the first
-        // whitespace; `\S*` matches the empty string so this is
-        // always non-null even for `infoString === ''`.
-        const lang = (infoString || '').match(/\S*/)?.[0] ?? '';
+        // Keep the whole info string; the language for highlighting / diagram
+        // detection is its first word (CommonMark §4.5).
+        const info = (infoString || '').trim();
+        const lang = firstWordOfInfo(info);
 
         let value = text;
         // Fix: #1265.
@@ -449,17 +450,14 @@ export class MarkdownToState {
         // but `'fenced'` reaches us at runtime via the
         // walkTokens assignment — hence the cast.
         const isFenced = (codeBlockStyle as 'indented' | 'fenced' | undefined) === 'fenced';
-        // Preserve the full info string when it carries more than the language
-        // word (attributes like `title="x"`, or a Pandoc/RMarkdown `{…}` block),
-        // so the fence round-trips instead of collapsing to its first word (#4770).
-        const info = infoString || '';
         return {
             name: 'code-block' as const,
             meta: {
                 type: isFenced ? 'fenced' : 'indented',
-                lang,
+                // The full info string verbatim (empty for indented blocks); the
+                // language is its first word — see `firstWordOfInfo`.
+                lang: info,
                 ...(isFenced && fenceLength && fenceLength > 3 ? { fenceLength } : {}),
-                ...(isFenced && info !== lang ? { info } : {}),
             },
             text: value,
         };
