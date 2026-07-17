@@ -28,23 +28,28 @@ don't assert on (visual theme, feel, timing).
 
 ## 2. Build and launch
 
-E2E and manual testing both run against the built app, not `pnpm run dev`
-(dev works too, but the instructions below assume the built app):
-
 ```powershell
 pnpm install
-pnpm run build:unpack
 ```
 
-This produces `packages/desktop/out/`. Launch it directly:
+Then pick one of these to actually launch the app:
 
-```powershell
-& "packages\desktop\out\win-unpacked\MarkText.exe"
-```
-
-(Or `pnpm run dev` for a hot-reloading renderer if you're iterating —
-remember `main/` changes need a dev-server restart, only the renderer
-hot-reloads.)
+- **Iterating on code** (recommended day to day): `pnpm run dev` — hot
+  reloads the renderer; `main/`/`preload/` changes need the dev server
+  restarted (`Ctrl+C`, rerun), `Ctrl+R` in the app window only reloads the
+  renderer + preload.
+- **Testing a built bundle without packaging** (what e2e runs against):
+  ```powershell
+  pnpm run build:unpack
+  node_modules\.bin\electron.cmd packages\desktop
+  ```
+  This launches Electron directly against `packages/desktop/out/` (main/
+  preload/renderer bundles), the same way `test/e2e/helpers.ts` does — no
+  installer, no `dist/` output.
+- **A real installed/portable build** (heavier, only if you specifically
+  need to test the packaged app): `pnpm run build:win:x64`, then run
+  `dist\win-unpacked\marktext.exe` (or the NSIS installer next to it, also
+  under `dist\`).
 
 ## 3. Turn on review mode
 
