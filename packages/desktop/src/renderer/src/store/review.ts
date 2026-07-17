@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { toRaw } from 'vue'
 import { computeHunks, normalizeText, type DiffHunk } from 'common/diff'
 import { resolveDocument, type HunkDecision } from 'common/diff/resolve'
 import { useEditorStore } from './editor'
@@ -186,7 +187,11 @@ export const useReviewStore = defineStore('review', {
     },
 
     _saveOptions(): SaveOptions {
-      const { diskMeta } = this
+      // Pinia state is a reactive Proxy; nested objects (diskMeta.encoding)
+      // are lazily wrapped too. Electron's IPC uses structured clone, which
+      // rejects Proxies ("An object could not be cloned"), so unwrap to the
+      // raw target before it crosses the bridge.
+      const diskMeta = this.diskMeta ? toRaw(this.diskMeta) : null
       return {
         encoding: diskMeta?.encoding,
         lineEnding: diskMeta?.lineEnding as SaveOptions['lineEnding'],
