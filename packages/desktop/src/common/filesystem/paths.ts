@@ -157,6 +157,23 @@ export const isSamePathSync = (
 }
 
 /**
+ * Pure path equality for matching filesystem events against registered paths:
+ * normalized, and case-insensitive on Windows. Unlike isSamePathSync it never
+ * stats, so it also works for paths whose file no longer exists.
+ */
+export const arePathsEquivalent = (
+  pathA: string,
+  pathB: string,
+  caseInsensitive: boolean = process.platform === 'win32'
+): boolean => {
+  if (!pathA || !pathB) return false
+  const a = path.normalize(pathA)
+  const b = path.normalize(pathB)
+  if (a === b) return true
+  return caseInsensitive && a.toLowerCase() === b.toLowerCase()
+}
+
+/**
  * Check whether a file or directory is a child of the given directory.
  */
 export const isChildOfDirectory = (dir: string, child: string): boolean => {

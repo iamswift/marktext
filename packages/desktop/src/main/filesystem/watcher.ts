@@ -3,9 +3,15 @@ import fsPromises from 'fs/promises'
 import log from 'electron-log'
 import chokidar, { type FSWatcher } from 'chokidar'
 import { exists } from 'common/filesystem'
-import { hasMarkdownExtension, checkPathExcludePattern } from 'common/filesystem/paths'
+import {
+  hasMarkdownExtension,
+  checkPathExcludePattern,
+  arePathsEquivalent
+} from 'common/filesystem/paths'
+import { withFsRetry } from 'common/filesystem/retry'
 import { getUniqueId } from '../utils'
 import { loadMarkdownFile } from '../filesystem/markdown'
+import { UnlinkCoalescer } from '../filesystem/unlinkCoalescer'
 import { isLinux, isOsx } from '../config'
 import type { BrowserWindow } from 'electron'
 import type { LineEnding } from '@shared/types/files'
@@ -72,12 +78,14 @@ const add = async(
   if (isMarkdown) {
     // HACK: But this should be removed completely in #1034/#1035.
     try {
-      const data = await loadMarkdownFile(
-        pathname,
-        endOfLine,
-        autoGuessEncoding,
-        trimTrailingNewline,
-        autoNormalizeLineEndings
+      const data = await withFsRetry(() =>
+        loadMarkdownFile(
+          pathname,
+          endOfLine,
+          autoGuessEncoding,
+          trimTrailingNewline,
+          autoNormalizeLineEndings
+        )
       )
       file.data = data
     } catch (err) {
@@ -133,7 +141,9 @@ const change = async(
   if (isMarkdown) {
     try {
       const [data, stats] = await Promise.all([
-        loadMarkdownFile(pathname, endOfLine, autoGuessEncoding, trimTrailingNewline, autoNormalizeLineEndings),
+        withFsRetry(() =>
+          loadMarkdownFile(pathname, endOfLine, autoGuessEncoding, trimTrailingNewline, autoNormalizeLineEndings)
+        ),
         fsPromises.stat(pathname)
       ])
       const file = { pathname, data, mtimeMs: stats.mtimeMs }
@@ -251,8 +261,21 @@ class Watcher {
     let enospcReached = false
     let renameTimer: NodeJS.Timeout | null = null
 
+    // Delete-then-recreate saves emit unlink followed by change on Windows;
+    // hold file-watcher unlinks until the recreate window has passed so they
+    // do not surface as a false "file removed on disk" (temp+rename saves
+    // already arrive as a single change and never enter this path).
+    const unlinkCoalescer =
+      type === 'file'
+        ? new UnlinkCoalescer({
+          fileExists: (pathname) => exists(pathname),
+          onConfirmedUnlink: (pathname) => unlink(win, pathname, type)
+        })
+        : null
+
     watcher
       .on('add', async(pathname: string) => {
+        unlinkCoalescer?.handleReappear(pathname)
         if (!(await this._shouldIgnoreEvent(win.id, pathname, type, usePolling))) {
           const { _preferences } = this
           const eol = _preferences.getPreferredEol() as LineEnding
@@ -273,6 +296,7 @@ class Watcher {
         }
       })
       .on('change', async(pathname: string) => {
+        unlinkCoalescer?.handleReappear(pathname)
         if (!(await this._shouldIgnoreEvent(win.id, pathname, type, usePolling))) {
           const { _preferences } = this
           const eol = _preferences.getPreferredEol() as LineEnding
@@ -292,7 +316,13 @@ class Watcher {
           )
         }
       })
-      .on('unlink', (pathname: string) => unlink(win, pathname, type))
+      .on('unlink', (pathname: string) => {
+        if (unlinkCoalescer) {
+          unlinkCoalescer.handleUnlink(pathname)
+        } else {
+          unlink(win, pathname, type)
+        }
+      })
       .on('addDir', (pathname: string) => addDir(win, pathname, type))
       .on('unlinkDir', (pathname: string) => unlinkDir(win, pathname, type))
       .on('raw', (event: string, subpath: string, details: unknown) => {
@@ -349,6 +379,7 @@ class Watcher {
         clearTimeout(renameTimer)
         renameTimer = null
       }
+      unlinkCoalescer?.dispose()
       watcher.close()
     }
 
@@ -423,7 +454,7 @@ class Watcher {
       const currentTime = new Date()
       for (let i = 0; i < _ignoreChangeEvents.length; ++i) {
         const { windowId, pathname: pathToIgnore, start, duration } = _ignoreChangeEvents[i]
-        if (windowId === winId && pathToIgnore === pathname) {
+        if (windowId === winId && arePathsEquivalent(pathToIgnore, pathname)) {
           _ignoreChangeEvents.splice(i, 1)
           --i
 
