@@ -17,7 +17,13 @@
         :muya-index-cursor="muyaIndexCursor"
         :text-direction="textDirection"
       />
-      <review-overlay v-if="reviewVisible" />
+      <div
+        v-if="reviewVisible"
+        class="review-container"
+      >
+        <review-bar />
+        <review-overlay />
+      </div>
     </div>
     <tab-notifications />
   </div>
@@ -34,6 +40,7 @@ import Editor from './editor.vue'
 import SourceCode from './sourceCode.vue'
 import TabNotifications from './notifications.vue'
 import ReviewOverlay from './reviewOverlay.vue'
+import ReviewBar from './reviewBar.vue'
 
 defineProps<{
   markdown: string
@@ -71,5 +78,12 @@ const reviewVisible = computed(
     flex: 1;
     overflow: hidden;
   }
+}
+
+.review-container {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
 }
 </style>

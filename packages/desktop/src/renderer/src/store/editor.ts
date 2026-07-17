@@ -1688,7 +1688,7 @@ export const useEditorStore = defineStore('editor', {
               if (fileChangeAction === 'review') {
                 // Falls back to reload when the change has no line-level diff
                 // (e.g. EOL-only), so disk and editor still converge.
-                if (!useReviewStore().enterReview(tab, payload)) {
+                if (!useReviewStore().enterReview(tab, payload, !isSaved)) {
                   this.loadChange(payload)
                 }
                 debouncedSendBufferedState()
@@ -1735,7 +1735,10 @@ export const useEditorStore = defineStore('editor', {
                   ],
                   action: (status) => {
                     if (status === 'review') {
-                      if (!useReviewStore().enterReview(tab, payload)) {
+                      // `isSaved` is the tab's dirty state from before this
+                      // handler forced tab.isSaved false above — the real
+                      // answer to "did the user have unsaved edits?" (FR-3).
+                      if (!useReviewStore().enterReview(tab, payload, !isSaved)) {
                         this.loadChange(payload)
                       }
                     } else if (status === 'reload' || status === true) {

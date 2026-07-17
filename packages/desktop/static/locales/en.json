@@ -945,7 +945,19 @@
     "edit": "Edit",
     "editHint": "Modify this change before accepting it",
     "confirmEdit": "Save edit",
-    "cancelEdit": "Cancel"
+    "cancelEdit": "Cancel",
+    "prev": "Previous",
+    "next": "Next",
+    "acceptAll": "Accept all",
+    "rejectAll": "Reject all",
+    "exit": "Exit review",
+    "remainingCount": "{count} changes remaining",
+    "allDecided": "All changes decided",
+    "unsavedBaselineBanner": "This review started from unsaved edits — accepted changes are layered on top of them.",
+    "exitPromptMessage": "{count} changes are still undecided. What do you want to do before leaving review?",
+    "acceptRemaining": "Accept remaining",
+    "rejectRemaining": "Reject remaining",
+    "cancelExit": "Keep reviewing"
   },
   "spellchecker": {
     "failedToRemoveWord": "Failed to remove word from dictionary",

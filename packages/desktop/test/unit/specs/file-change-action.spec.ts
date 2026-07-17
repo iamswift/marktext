@@ -133,6 +133,30 @@ describe('useEditorStore LISTEN_FOR_FILE_CHANGE — fileChangeAction matrix', ()
     expect(loadChangeSpy).toHaveBeenCalledTimes(1)
   })
 
+  it("'review' passes the tab's actual dirty state as wasUnsaved (FR-3)", () => {
+    const { enterReviewSpy, fire } = setup({ fileChangeAction: 'review', isSaved: false })
+    fire()
+    expect(enterReviewSpy.mock.calls[0][2]).toBe(true)
+  })
+
+  it(
+    "'ask' review button passes wasUnsaved from before the notification " +
+      'forced tab.isSaved false, not the (now stale) mutated value',
+    () => {
+      const { notifySpy, enterReviewSpy, fire } = setup({
+        fileChangeAction: 'ask',
+        isSaved: true
+      })
+      fire()
+      const payload = notifySpy.mock.calls[0][0] as NotificationPayload
+      payload.action('review')
+      // The tab really was saved when the external change landed — even
+      // though the 'ask' handler already flipped tab.isSaved to false by
+      // the time the user clicks "Review" — so the banner must not fire.
+      expect(enterReviewSpy.mock.calls[0][2]).toBe(false)
+    }
+  )
+
   it("'reload' keeps the legacy confirm notification", () => {
     const { notifySpy, fire } = setup({ fileChangeAction: 'reload' })
     fire()

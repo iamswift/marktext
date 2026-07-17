@@ -3,6 +3,7 @@ import { toRaw } from 'vue'
 import { computeHunks, normalizeText, type DiffHunk } from 'common/diff'
 import { resolveDocument, type HunkDecision } from 'common/diff/resolve'
 import { useEditorStore } from './editor'
+import { t } from '../i18n'
 import type { IFileState, LineEnding, SaveOptions } from '@shared/types/files'
 
 // Serializes review write-backs: each write covers the full latest decision
@@ -82,8 +83,19 @@ export const useReviewStore = defineStore('review', {
      * Starts a review of the on-disk change against the tab's current content.
      * Returns false when there is no line-level difference (e.g. an EOL-only
      * change) — the caller should fall back to a plain reload in that case.
+     *
+     * `wasUnsaved` defaults to the tab's current isSaved flag, but callers
+     * that defer entering review behind a notification action (the 'ask'
+     * pathway forces tab.isSaved false the moment the change arrives, before
+     * the user even picks "Review") must capture and pass the tab's dirty
+     * state from *before* that mutation — otherwise FR-3's banner would
+     * fire on every review, unsaved edits or not.
      */
-    enterReview(tab: IFileState, change: ReviewChangePayload): boolean {
+    enterReview(
+      tab: IFileState,
+      change: ReviewChangePayload,
+      wasUnsaved: boolean = !tab.isSaved
+    ): boolean {
       const hunks = computeHunks(tab.markdown, change.data.markdown)
       if (hunks.length === 0) {
         return false
@@ -95,7 +107,7 @@ export const useReviewStore = defineStore('review', {
         pathname: change.pathname,
         baselineText: tab.markdown,
         proposedText: change.data.markdown,
-        baselineWasUnsaved: !tab.isSaved,
+        baselineWasUnsaved: wasUnsaved,
         hunks,
         decisions: new Map(),
         activeHunkId: hunks[0].id,
@@ -167,6 +179,72 @@ export const useReviewStore = defineStore('review', {
       }
       await this._writeResolved()
       this._maybeFinalize()
+    },
+
+    /** Moves the focused hunk forward/backward through the undecided list, wrapping. */
+    focusNext(): void {
+      this._focusBy(1)
+    },
+
+    focusPrev(): void {
+      this._focusBy(-1)
+    },
+
+    _focusBy(direction: 1 | -1): void {
+      const { undecidedHunks, activeHunkId } = this
+      if (undecidedHunks.length === 0) {
+        this.activeHunkId = null
+        return
+      }
+      const currentIndex = undecidedHunks.findIndex((hunk) => hunk.id === activeHunkId)
+      const nextIndex =
+        currentIndex === -1
+          ? direction > 0
+            ? 0
+            : undecidedHunks.length - 1
+          : (currentIndex + direction + undecidedHunks.length) % undecidedHunks.length
+      this.activeHunkId = undecidedHunks[nextIndex].id
+    },
+
+    /**
+     * Asks how to leave a review with hunks still undecided (source-mode
+     * toggle, tab close, the review bar's Exit button, or Esc on the
+     * overlay). Reuses the tab-notification contract from M3 — Cancel just
+     * dismisses the prompt and leaves the review active.
+     */
+    requestExit(): void {
+      if (!this.active) {
+        return
+      }
+      if (this.remainingCount === 0) {
+        // Nothing left to decide; _maybeFinalize would have already exited,
+        // but guard against being called from a stale UI state.
+        this.exitReview()
+        return
+      }
+
+      const { tabId } = this
+      if (!tabId) {
+        return
+      }
+      useEditorStore().pushTabNotification({
+        tabId,
+        msg: t('review.exitPromptMessage', { count: this.remainingCount }),
+        exclusiveType: 'review_exit',
+        buttons: [
+          { label: t('review.acceptRemaining'), value: 'accept' },
+          { label: t('review.rejectRemaining'), value: 'reject' },
+          { label: t('review.cancelExit'), value: 'cancel' }
+        ],
+        action: (status) => {
+          if (status === 'accept') {
+            this.acceptAll().catch(() => {})
+          } else if (status === 'reject') {
+            this.rejectAll().catch(() => {})
+          }
+          // 'cancel', dismiss (false), or the default OK path: stay in review.
+        }
+      })
     },
 
     async _decideRemaining(decision: HunkDecision): Promise<void> {

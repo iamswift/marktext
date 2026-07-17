@@ -3,6 +3,7 @@
     ref="overlayRef"
     class="review-overlay"
     tabindex="0"
+    @keydown="onKeydown"
   >
     <div class="review-document">
       <template v-for="(segment, index) in renderedSegments">
@@ -50,7 +51,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { renderToStaticHTML } from '@muyajs/core'
 import { annotateMerged, computeRegions } from 'common/diff/regions'
 import { useReviewStore } from '@/store/review'
@@ -171,12 +172,76 @@ onMounted(() => {
   // Takes keyboard focus away from the (neutralized) contenteditable editor.
   overlayRef.value?.focus()
 })
+
+// Keeps the focused hunk in view as focusNext/focusPrev (keyboard or the
+// review bar) move it — a hunk can have several parts, each carrying the
+// same data-hunk-id, so the first match is enough to scroll to.
+watch(
+  () => reviewStore.activeHunkId,
+  (hunkId) => {
+    if (!hunkId) {
+      return
+    }
+    nextTick(() => {
+      overlayRef.value
+        ?.querySelector(`[data-hunk-id="${hunkId}"]`)
+        ?.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    })
+  }
+)
+
+// The hunk editor's textarea holds keyboard focus while it's open; once it
+// unmounts (confirm or cancel) the browser drops focus to <body>, which
+// would silently swallow every subsequent shortcut (including Escape).
+// Reclaim it the same way onMounted does initially.
+watch(
+  () => reviewStore.editingHunkId,
+  (hunkId, previousHunkId) => {
+    if (hunkId === null && previousHunkId !== null) {
+      nextTick(() => {
+        overlayRef.value?.focus()
+      })
+    }
+  }
+)
+
+// While editing a hunk, the sub-editor owns Escape/Ctrl+Enter itself
+// (stopped there); plain letter shortcuts are left alone so they still type
+// normally into its textarea instead of triggering navigation/decisions.
+const onKeydown = (event: KeyboardEvent): void => {
+  if (reviewStore.editingHunkId) {
+    return
+  }
+
+  const { key, altKey } = event
+  if (key === 'j' || (altKey && key === 'ArrowDown')) {
+    event.preventDefault()
+    reviewStore.focusNext()
+  } else if (key === 'k' || (altKey && key === 'ArrowUp')) {
+    event.preventDefault()
+    reviewStore.focusPrev()
+  } else if ((key === 'a' || key === 'A') && reviewStore.activeHunkId) {
+    event.preventDefault()
+    reviewStore.decide(reviewStore.activeHunkId, { kind: 'accept' }).catch(console.error)
+  } else if ((key === 'r' || key === 'R') && reviewStore.activeHunkId) {
+    event.preventDefault()
+    reviewStore.decide(reviewStore.activeHunkId, { kind: 'reject' }).catch(console.error)
+  } else if ((key === 'e' || key === 'E') && reviewStore.activeHunkId) {
+    event.preventDefault()
+    reviewStore.beginEdit(reviewStore.activeHunkId)
+  } else if (key === 'Escape') {
+    event.preventDefault()
+    reviewStore.requestExit()
+  }
+}
 </script>
 
 <style scoped>
 .review-overlay {
-  position: absolute;
-  inset: 0;
+  /* Sits below reviewBar.vue in a flex column (.review-container in
+     editorWithTabs/index.vue), not absolutely positioned itself. */
+  position: relative;
+  flex: 1;
   overflow-y: auto;
   outline: none;
   background: var(--editorBgColor);
