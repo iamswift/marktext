@@ -22,6 +22,12 @@
           :step="100"
           :on-change="(value) => onSelectChange('autoSaveDelay', value)"
         />
+        <cur-select
+          :description="t('preferences.general.fileChangeAction.title')"
+          :value="fileChangeAction"
+          :options="getFileChangeActionOptions()"
+          :on-change="(value) => onSelectChange('fileChangeAction', value)"
+        />
       </template>
     </compound>
 
@@ -196,6 +202,7 @@ import textBox from '../common/textBox/index.vue'
 import { isOsx } from '@/util'
 
 import {
+  getFileChangeActionOptions,
   getTitleBarStyleOptions,
   zoomOptions,
   getFileSortByOptions,
@@ -209,6 +216,7 @@ const preferenceStore = usePreferencesStore()
 const {
   autoSave,
   autoSaveDelay,
+  fileChangeAction,
   titleBarStyle,
   defaultDirectoryToOpen,
   openFilesInNewWindow,

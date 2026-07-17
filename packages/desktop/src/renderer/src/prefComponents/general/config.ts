@@ -1,6 +1,21 @@
 import { t } from '../../i18n'
 import type { PrefSelectOption } from '../common/types'
 
+export const getFileChangeActionOptions = (): PrefSelectOption<string>[] => [
+  {
+    label: t('preferences.general.fileChangeAction.ask'),
+    value: 'ask'
+  },
+  {
+    label: t('preferences.general.fileChangeAction.review'),
+    value: 'review'
+  },
+  {
+    label: t('preferences.general.fileChangeAction.reload'),
+    value: 'reload'
+  }
+]
+
 export const getTitleBarStyleOptions = (): PrefSelectOption<string>[] => [
   {
     label: t('preferences.general.window.titleBarStyle.custom'),

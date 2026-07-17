@@ -440,6 +440,12 @@
         "description": "Auto save",
         "delayDescription": "Auto save delay"
       },
+      "fileChangeAction": {
+        "title": "When an open file is changed on disk",
+        "ask": "Ask what to do",
+        "review": "Review changes inline",
+        "reload": "Reload automatically"
+      },
       "window": {
         "title": "Window",
         "titleBarStyle": {
@@ -925,7 +931,10 @@
       "exportSuccessTitle": "Exported successfully",
       "exportSuccessMessage": "Exported \"{name}\" successfully!",
       "fileRemovedOnDisk": "\"{name}\" has been removed on disk.",
-      "fileChangedOnDisk": "\"{name}\" has been changed on disk. Do you want to reload it?"
+      "fileChangedOnDisk": "\"{name}\" has been changed on disk. Do you want to reload it?",
+      "fileChangedOnDiskReview": "\"{name}\" has been changed on disk.",
+      "reviewChanges": "Review",
+      "reloadFromDisk": "Reload"
     }
   },
   "spellchecker": {

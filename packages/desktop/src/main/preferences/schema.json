@@ -10,6 +10,11 @@
     "minimum": 1000,
     "default": 5000
   },
+  "fileChangeAction": {
+    "description": "General--What to do when an open file is changed on disk by another program.",
+    "enum": ["ask", "review", "reload"],
+    "default": "ask"
+  },
   "titleBarStyle": {
     "description": "General--The title bar style (Windows and Linux system only).",
     "enum": ["custom", "native"],

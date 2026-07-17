@@ -17,6 +17,7 @@ import {
 } from '../commands'
 import { defineStore } from 'pinia'
 import { usePreferencesStore } from './preferences'
+import { useReviewStore } from './review'
 import { useProjectStore } from './project'
 import { useLayoutStore } from './layout'
 import { useMainStore } from '.'
@@ -59,6 +60,7 @@ interface PushTabNotificationPayload {
   showConfirm?: boolean
   style?: string
   exclusiveType?: string
+  buttons?: FileNotification['buttons']
   action?: FileNotification['action']
 }
 
@@ -296,6 +298,7 @@ export const useEditorStore = defineStore('editor', {
         showConfirm,
         style,
         exclusiveType,
+        buttons: data.buttons,
         action
       })
     },
@@ -1679,8 +1682,23 @@ export const useEditorStore = defineStore('editor', {
                 break
               }
 
-              const { autoSave } = preferencesStore
-              if (autoSave) {
+              const { autoSave, fileChangeAction } = preferencesStore
+              const payload = change as unknown as FileChangePayload
+
+              if (fileChangeAction === 'review') {
+                // Falls back to reload when the change has no line-level diff
+                // (e.g. EOL-only), so disk and editor still converge.
+                if (!useReviewStore().enterReview(tab, payload)) {
+                  this.loadChange(payload)
+                }
+                debouncedSendBufferedState()
+                break
+              }
+
+              // The auto-save silent reload stays confined to the explicit
+              // 'reload' preference; under 'ask' the user chose to be asked,
+              // which auto-save must not bypass.
+              if (fileChangeAction === 'reload' && autoSave) {
                 if (autoSaveTimers.has(id)) {
                   const timer = autoSaveTimers.get(id)
                   if (timer) clearTimeout(timer)
@@ -1688,23 +1706,44 @@ export const useEditorStore = defineStore('editor', {
                 }
 
                 if (isSaved) {
-                  this.loadChange(change as unknown as FileChangePayload)
+                  this.loadChange(payload)
                   return
                 }
               }
 
               tab.isSaved = false
-              this.pushTabNotification({
-                tabId: id,
-                msg: t('store.editor.fileChangedOnDisk', { name: filename }),
-                showConfirm: true,
-                exclusiveType: 'file_changed',
-                action: (status) => {
-                  if (status) {
-                    this.loadChange(change as unknown as FileChangePayload)
+              if (fileChangeAction === 'reload') {
+                this.pushTabNotification({
+                  tabId: id,
+                  msg: t('store.editor.fileChangedOnDisk', { name: filename }),
+                  showConfirm: true,
+                  exclusiveType: 'file_changed',
+                  action: (status) => {
+                    if (status) {
+                      this.loadChange(payload)
+                    }
                   }
-                }
-              })
+                })
+              } else {
+                this.pushTabNotification({
+                  tabId: id,
+                  msg: t('store.editor.fileChangedOnDiskReview', { name: filename }),
+                  exclusiveType: 'file_changed',
+                  buttons: [
+                    { label: t('store.editor.reviewChanges'), value: 'review' },
+                    { label: t('store.editor.reloadFromDisk'), value: 'reload' }
+                  ],
+                  action: (status) => {
+                    if (status === 'review') {
+                      if (!useReviewStore().enterReview(tab, payload)) {
+                        this.loadChange(payload)
+                      }
+                    } else if (status === 'reload' || status === true) {
+                      this.loadChange(payload)
+                    }
+                  }
+                })
+              }
               debouncedSendBufferedState()
               break
             }
