@@ -50,10 +50,15 @@ test.describe('External disk reload — undo restores the pre-change document', 
     const { app, page, filePath } = await launchWithMarkdown('old content here\n')
     await waitForMenuReady(app)
 
-    // Auto-reload only applies silently when autoSave is on AND the tab is
-    // unmodified (a freshly-loaded tab is saved). Enable autoSave so the change
-    // applies without the manual "Reload" confirmation prompt.
-    await sendIpcToRenderer(app, 'mt::user-preference', { autoSave: true })
+    // Auto-reload only applies silently when autoSave is on, fileChangeAction
+    // is explicitly 'reload' (the review preference's 'ask' default takes
+    // precedence over auto-save's silent reload — see the PRD's blessed
+    // auto-save/review interplay), and the tab is unmodified (a freshly
+    // loaded tab is saved).
+    await sendIpcToRenderer(app, 'mt::user-preference', {
+      autoSave: true,
+      fileChangeAction: 'reload'
+    })
     await page.waitForTimeout(100)
 
     await reportExternalChange(app, filePath, 'new content here\n')
@@ -98,9 +103,13 @@ test.describe('External disk reload — source-mode scroll position survives a s
     const { app, page, filePath } = await launchWithMarkdown(longBody)
     await waitForMenuReady(app)
 
-    // Auto-reload only applies silently when autoSave is on AND the tab is
-    // unmodified (a freshly-loaded tab is saved) — same gate as the undo test.
-    await sendIpcToRenderer(app, 'mt::user-preference', { autoSave: true })
+    // Auto-reload only applies silently when autoSave is on, fileChangeAction
+    // is explicitly 'reload', and the tab is unmodified — same gate as the
+    // undo test above.
+    await sendIpcToRenderer(app, 'mt::user-preference', {
+      autoSave: true,
+      fileChangeAction: 'reload'
+    })
     await page.waitForTimeout(100)
 
     await enterSourceMode(page, app)
