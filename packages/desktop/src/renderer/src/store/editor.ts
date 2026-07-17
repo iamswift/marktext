@@ -962,6 +962,17 @@ export const useEditorStore = defineStore('editor', {
       const target = file ?? this.currentFile
       if (target === null) return
 
+      // A reviewing tab's isSaved flag doesn't reliably reflect it having
+      // undecided hunks (write-backs deliberately never mark it saved, but
+      // nothing marks it unsaved either on the direct 'review' preference
+      // entry path) — check review state directly instead of routing it
+      // through the ordinary saved/unsaved close paths.
+      const reviewStore = useReviewStore()
+      if (reviewStore.active && reviewStore.tabId === target.id) {
+        reviewStore.requestExit()
+        return
+      }
+
       if (target.isSaved) {
         this.FORCE_CLOSE_TAB(target)
       } else {
@@ -1659,8 +1670,17 @@ export const useEditorStore = defineStore('editor', {
         const tab = tabs.find((t) => window.fileUtils.isSamePathSync(t.pathname, pathname))
         if (tab) {
           const { id, isSaved, filename } = tab
+          const reviewStore = useReviewStore()
+          // A tab under review has its own concurrency handling (restart /
+          // abandon / file-deleted) — it must not also run through the
+          // normal ask/reload/review-entry branches below.
+          const isReviewingThisTab = reviewStore.active && reviewStore.tabId === tab.id
+
           switch (type) {
             case 'unlink': {
+              if (isReviewingThisTab) {
+                reviewStore.handleFileDeleted()
+              }
               tab.isSaved = false
               this.pushTabNotification({
                 tabId: id,
@@ -1674,21 +1694,28 @@ export const useEditorStore = defineStore('editor', {
             }
             case 'add':
             case 'change': {
+              const payload = change as unknown as FileChangePayload
+
+              if (isReviewingThisTab) {
+                reviewStore.handleExternalChangeDuringReview(payload)
+                debouncedSendBufferedState()
+                break
+              }
+
               // Only the file's metadata changed on disk (e.g. a git checkout
               // that left the content byte-identical) — there is nothing to
               // reload and no reason to warn the user (#1861).
-              const newMarkdown = (change as unknown as FileChangePayload).data?.markdown
+              const newMarkdown = payload.data?.markdown
               if (typeof newMarkdown === 'string' && newMarkdown === tab.markdown) {
                 break
               }
 
               const { autoSave, fileChangeAction } = preferencesStore
-              const payload = change as unknown as FileChangePayload
 
               if (fileChangeAction === 'review') {
                 // Falls back to reload when the change has no line-level diff
                 // (e.g. EOL-only), so disk and editor still converge.
-                if (!useReviewStore().enterReview(tab, payload, !isSaved)) {
+                if (!reviewStore.enterReview(tab, payload, !isSaved)) {
                   this.loadChange(payload)
                 }
                 debouncedSendBufferedState()
@@ -1738,7 +1765,7 @@ export const useEditorStore = defineStore('editor', {
                       // `isSaved` is the tab's dirty state from before this
                       // handler forced tab.isSaved false above — the real
                       // answer to "did the user have unsaved edits?" (FR-3).
-                      if (!useReviewStore().enterReview(tab, payload, !isSaved)) {
+                      if (!reviewStore.enterReview(tab, payload, !isSaved)) {
                         this.loadChange(payload)
                       }
                     } else if (status === 'reload' || status === true) {

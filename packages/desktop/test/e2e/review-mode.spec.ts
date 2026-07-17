@@ -1,7 +1,7 @@
 import * as fs from 'node:fs'
 import { expect, test } from '@playwright/test'
 import type { ElectronApplication, Page } from 'playwright'
-import { launchWithMarkdown } from './helpers'
+import { launchWithMarkdown, clickMenuById } from './helpers'
 
 const FIXTURE = [
   '# Review fixture',
@@ -323,5 +323,79 @@ test.describe('inline diff review mode: keyboard and review bar', () => {
     expect(final).toContain('Gamma EDITED.')
     expect(final).toContain('Delta changed.')
     expect(final).toContain('Epsilon changed.')
+  })
+})
+
+const GUARD_FIXTURE = ['# Guard fixture', '', 'Alpha original.', '', 'Beta original.', ''].join(
+  '\n'
+)
+const GUARD_MODIFIED_1 = GUARD_FIXTURE.replace('Alpha original.', 'Alpha changed.')
+const GUARD_MODIFIED_2 = GUARD_MODIFIED_1.replace('Beta original.', 'Beta changed.')
+
+test.describe('inline diff review mode: source-mode guard and mid-review concurrency', () => {
+  let app: ElectronApplication
+  let page: Page
+  let filePath: string
+
+  test.beforeAll(async() => {
+    const launched = await launchWithMarkdown(GUARD_FIXTURE)
+    app = launched.app
+    page = launched.page
+    filePath = launched.filePath
+  })
+
+  test.afterAll(async() => {
+    await app.close()
+  })
+
+  test('source-mode toggle is redirected to the exit prompt while reviewing', async() => {
+    await page.waitForTimeout(1500)
+    fs.writeFileSync(filePath, GUARD_MODIFIED_1, 'utf-8')
+
+    const reviewButton = page.locator('.editor-notifications .inline-button.labeled', {
+      hasText: 'Review'
+    })
+    await expect(reviewButton).toBeVisible({ timeout: 15000 })
+    await reviewButton.click()
+    await expect(page.locator('.review-overlay')).toBeVisible({ timeout: 5000 })
+
+    // Trying to enter source mode mid-review must not actually enter it —
+    // it should ask Accept remaining/Reject remaining/Keep reviewing instead
+    // (TOGGLE_VIEW_MODE's review guard).
+    await clickMenuById(app, 'sourceCodeModeMenuItem')
+    const keepReviewing = page.locator('.editor-notifications .inline-button.labeled', {
+      hasText: 'Keep reviewing'
+    })
+    await expect(keepReviewing).toBeVisible({ timeout: 5000 })
+    await expect(page.locator('.source-code')).toHaveCount(0)
+    await expect(page.locator('.review-overlay')).toBeVisible()
+
+    await keepReviewing.click()
+    await expect(page.locator('.review-overlay')).toBeVisible()
+    await expect(page.locator('.source-code')).toHaveCount(0)
+  })
+
+  test('a second external write mid-review offers Restart/Abandon; restarting re-diffs live', async() => {
+    fs.writeFileSync(filePath, GUARD_MODIFIED_2, 'utf-8')
+
+    const restartButton = page.locator('.editor-notifications .inline-button.labeled', {
+      hasText: 'Restart review'
+    })
+    await expect(restartButton).toBeVisible({ timeout: 15000 })
+    await restartButton.click()
+
+    // The overlay now reflects both hunks against the newest disk content.
+    await expect(page.locator('.review-bar .review-count')).toHaveText('2 changes remaining')
+    await expect(
+      page.locator('.review-part.review-added', { hasText: 'Beta changed.' })
+    ).toBeVisible()
+
+    // Clean up: accept everything and confirm the reconciled write.
+    await page.locator('.review-bar .accept-all').click()
+    await expect(page.locator('.review-overlay')).toHaveCount(0, { timeout: 10000 })
+
+    const final = fs.readFileSync(filePath, 'utf-8')
+    expect(final).toContain('Alpha changed.')
+    expect(final).toContain('Beta changed.')
   })
 })

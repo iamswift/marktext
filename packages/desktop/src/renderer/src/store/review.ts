@@ -247,6 +247,114 @@ export const useReviewStore = defineStore('review', {
       })
     },
 
+    /**
+     * A second external write landed on disk while this tab was already
+     * under review. Asks whether to re-diff against the new content
+     * (carrying forward decisions whose hunk content recurs unchanged) or to
+     * abandon the in-progress review entirely and just reload.
+     */
+    handleExternalChangeDuringReview(change: ReviewChangePayload): void {
+      if (!this.active) {
+        return
+      }
+      const { tabId } = this
+      if (!tabId) {
+        return
+      }
+      useEditorStore().pushTabNotification({
+        tabId,
+        msg: t('review.midReviewChangeMessage'),
+        exclusiveType: 'review_mid_change',
+        buttons: [
+          { label: t('review.restartReview'), value: 'restart' },
+          { label: t('review.abandonReview'), value: 'abandon' }
+        ],
+        action: (status) => {
+          if (status === 'restart') {
+            this.restartAgainstNewDisk(change).catch(() => {})
+          } else if (status === 'abandon') {
+            this.exitReview()
+            useEditorStore().loadChange(this._asLoadChangePayload(change))
+          }
+          // Dismiss/default: keep reviewing against the now-stale proposed
+          // text — the next write-back will still be FR-10-correct against
+          // it, just not reflecting this second external edit yet.
+        }
+      })
+    },
+
+    /**
+     * Re-diffs the frozen baseline against the newest on-disk content.
+     * Decisions are carried forward by contentKey (same baseline/proposed
+     * line pair), so a hunk the user already resolved stays resolved even
+     * though its hunk id changed; anything new or altered comes back
+     * undecided.
+     */
+    async restartAgainstNewDisk(change: ReviewChangePayload): Promise<void> {
+      if (!this.active) {
+        return
+      }
+
+      const newHunks = computeHunks(this.baselineText, change.data.markdown)
+      if (newHunks.length === 0) {
+        // The new disk content now matches the frozen baseline exactly —
+        // nothing left to review.
+        const payload = this._asLoadChangePayload(change)
+        this.exitReview()
+        useEditorStore().loadChange(payload)
+        return
+      }
+
+      const decisionsByContentKey = new Map<string, HunkDecision>()
+      for (const hunk of this.hunks) {
+        const decision = this.decisions.get(hunk.id)
+        if (decision) {
+          decisionsByContentKey.set(hunk.contentKey, decision)
+        }
+      }
+
+      const carried = new Map<string, HunkDecision>()
+      for (const hunk of newHunks) {
+        const decision = decisionsByContentKey.get(hunk.contentKey)
+        if (decision) {
+          carried.set(hunk.id, decision)
+        }
+      }
+
+      this.$patch({
+        proposedText: change.data.markdown,
+        hunks: newHunks,
+        decisions: carried,
+        activeHunkId: newHunks.find((hunk) => !carried.has(hunk.id))?.id ?? null,
+        editingHunkId: null,
+        diskMeta: change.data,
+        writeState: 'idle',
+        writeError: null
+      })
+
+      // Carried-over decisions may differ from what's currently on disk
+      // (e.g. a rejected hunk whose content the external tool wrote again),
+      // so reconcile immediately.
+      await this._writeResolved()
+      this._maybeFinalize()
+    },
+
+    /** The file was deleted mid-review: there is nothing left to write back to. */
+    handleFileDeleted(): void {
+      if (!this.active) {
+        return
+      }
+      const { tabId } = this
+      this.exitReview()
+      if (tabId) {
+        const editorStore = useEditorStore()
+        const tab = editorStore.tabs.find((t) => t.id === tabId)
+        if (tab) {
+          tab.isSaved = false
+        }
+      }
+    },
+
     async _decideRemaining(decision: HunkDecision): Promise<void> {
       if (!this.active || this.remainingCount === 0) {
         return
@@ -258,6 +366,22 @@ export const useReviewStore = defineStore('review', {
       this.activeHunkId = null
       await this._writeResolved()
       this._maybeFinalize()
+    },
+
+    // `loadChange` (editor.ts) requires a filename; ReviewChangeData's is
+    // optional (it mirrors the on-disk change payload, which doesn't always
+    // carry one), so fall back to the pathname's basename like
+    // `_maybeFinalize` does.
+    _asLoadChangePayload(change: ReviewChangePayload): Parameters<
+      ReturnType<typeof useEditorStore>['loadChange']
+    >[0] {
+      return {
+        pathname: change.pathname,
+        data: {
+          ...change.data,
+          filename: change.data.filename ?? change.pathname.split(/[/\\]/).pop() ?? ''
+        }
+      }
     },
 
     _resolvedDocument(): string {

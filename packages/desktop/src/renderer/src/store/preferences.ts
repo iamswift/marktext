@@ -1,6 +1,8 @@
 import { defineStore } from 'pinia'
 import bus from '../bus'
 import { setLanguage } from '../i18n'
+import { useReviewStore } from './review'
+import { useEditorStore } from './editor'
 
 // Finite-value unions where the runtime currently constrains the field.
 // We keep these as plain strings everywhere else to avoid forcing prematurely
@@ -269,6 +271,19 @@ export const usePreferencesStore = defineStore('preferences', {
     },
 
     TOGGLE_VIEW_MODE(entryName: keyof PreferencesState | string): void {
+      // Source mode neutralizes the same editor the review overlay sits on
+      // top of — entering it mid-review would yank the surface out from
+      // under undecided hunks, so route through the same Accept remaining /
+      // Reject remaining / Keep reviewing prompt as any other review exit.
+      if (entryName === 'sourceCode') {
+        const reviewStore = useReviewStore()
+        const editorStore = useEditorStore()
+        if (reviewStore.active && reviewStore.tabId === editorStore.currentFile?.id) {
+          reviewStore.requestExit()
+          return
+        }
+      }
+
       const target = this as unknown as Record<string, unknown>
       target[entryName as string] = !target[entryName as string]
     },
