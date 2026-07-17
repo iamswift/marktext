@@ -107,11 +107,57 @@ test.describe('inline diff review mode', () => {
     expect(fs.readFileSync(filePath, 'utf-8')).toBe(MODIFIED)
   })
 
+  test('editing a hunk: cancel leaves it undecided, confirm writes the edited text', async() => {
+    // Cancel first: type into the paragraph hunk's editor, discard it, and
+    // confirm nothing was written and the hunk is still undecided (its plain
+    // deleted/added parts are back, not the editor).
+    const paragraphPart = page.locator('.review-part.review-deleted', {
+      hasText: 'change slightly over time'
+    })
+    await paragraphPart.hover()
+    await paragraphPart.locator('.review-hunk-controls .edit').click()
+
+    const paragraphEditor = page.locator('.review-hunk-editor')
+    await expect(paragraphEditor.locator('textarea')).toHaveValue(
+      'A paragraph that was rewritten by an external tool.'
+    )
+    await paragraphEditor.locator('textarea').fill('DISCARDED EDIT')
+    await paragraphEditor.locator('.cancel').click()
+
+    await expect(page.locator('.review-hunk-editor')).toHaveCount(0)
+    await expect(
+      page.locator('.review-part.review-deleted', { hasText: 'change slightly over time' })
+    ).toBeVisible()
+    expect(fs.readFileSync(filePath, 'utf-8')).not.toContain('DISCARDED EDIT')
+
+    // Confirm: edit the isolated list hunk (its own region) and save it —
+    // the edited text, not the external tool's original proposal, lands on
+    // disk, and the hunk melts back to plain content (it has no sibling
+    // hunk in its region, so the region itself also disappears).
+    const listRegionsBefore = await page.locator('.review-region').count()
+    const listPart = page.locator('.review-part.review-added', { hasText: 'item three' })
+    await listPart.hover()
+    await listPart.locator('.review-hunk-controls .edit').click()
+
+    const listEditor = page.locator('.review-hunk-editor')
+    await expect(listEditor.locator('textarea')).toHaveValue('- item three')
+    await listEditor.locator('textarea').fill('- item three (edited)')
+    await listEditor.locator('.confirm').click()
+
+    await expect
+      .poll(() => fs.readFileSync(filePath, 'utf-8'), { timeout: 10000 })
+      .toContain('item three (edited)')
+    await expect(page.locator('.review-hunk-editor')).toHaveCount(0)
+    await expect(page.locator('.review-region')).toHaveCount(listRegionsBefore - 1)
+  })
+
   test('per-hunk decisions write the file and the last one exits review', async() => {
-    // Hunk-to-region grouping depends on how jsdiff aligns blank lines, so
-    // assert structure dynamically rather than a hardcoded count.
+    // Hunk-to-region grouping depends on how jsdiff aligns blank lines, and
+    // the previous test already decided (and melted away) the list hunk's
+    // own region, so assert structure dynamically rather than a hardcoded
+    // count.
     const initialRegions = await page.locator('.review-region').count()
-    expect(initialRegions).toBeGreaterThanOrEqual(2)
+    expect(initialRegions).toBeGreaterThanOrEqual(1)
 
     // Reject the code change: disk loses `43`, keeps the still-undecided
     // paragraph rewrite (FR-10 — rejecting is what removes a change).

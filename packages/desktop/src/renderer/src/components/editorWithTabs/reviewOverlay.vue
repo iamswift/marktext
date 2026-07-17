@@ -19,22 +19,30 @@
           :class="{ active: isActiveRegion(segment) }"
           :data-hunk-ids="segment.hunkIds.join(' ')"
         >
-          <div
+          <template
             v-for="(part, partIndex) in segment.parts"
             :key="partIndex"
-            class="review-part"
-            :class="`review-${part.role}`"
-            :data-hunk-id="part.hunkId"
           >
-            <review-hunk-controls
-              v-if="part.hunkId && isFirstPartOfHunk(segment, partIndex)"
+            <review-hunk-editor
+              v-if="part.hunkId && isEditingHunkPart(segment, part, partIndex)"
               :hunk-id="part.hunkId"
             />
             <div
-              class="review-part-content"
-              v-html="part.html"
-            />
-          </div>
+              v-else-if="!isEditingHunkOtherPart(part)"
+              class="review-part"
+              :class="`review-${part.role}`"
+              :data-hunk-id="part.hunkId"
+            >
+              <review-hunk-controls
+                v-if="part.hunkId && isFirstPartOfHunk(segment, partIndex)"
+                :hunk-id="part.hunkId"
+              />
+              <div
+                class="review-part-content"
+                v-html="part.html"
+              />
+            </div>
+          </template>
         </div>
       </template>
     </div>
@@ -48,6 +56,7 @@ import { annotateMerged, computeRegions } from 'common/diff/regions'
 import { useReviewStore } from '@/store/review'
 import { applyWordMarks } from '@/util/reviewWordMarks'
 import ReviewHunkControls from './reviewHunkControls.vue'
+import ReviewHunkEditor from './reviewHunkEditor.vue'
 
 interface RenderedPart {
   role: 'context' | 'deleted' | 'added'
@@ -142,6 +151,21 @@ const isFirstPartOfHunk = (
   }
   return segment.parts.findIndex((p) => p.hunkId === hunkId) === partIndex
 }
+
+// While a hunk is being edited, its normal deleted/added parts are replaced
+// by a single reviewHunkEditor — rendered once, on the hunk's first part;
+// every other part belonging to that hunk renders nothing.
+const isEditingHunkPart = (
+  segment: { parts: RenderedPart[] },
+  part: RenderedPart,
+  partIndex: number
+): boolean =>
+  part.hunkId !== undefined &&
+  reviewStore.editingHunkId === part.hunkId &&
+  isFirstPartOfHunk(segment, partIndex)
+
+const isEditingHunkOtherPart = (part: RenderedPart): boolean =>
+  part.hunkId !== undefined && reviewStore.editingHunkId === part.hunkId
 
 onMounted(() => {
   // Takes keyboard focus away from the (neutralized) contenteditable editor.
