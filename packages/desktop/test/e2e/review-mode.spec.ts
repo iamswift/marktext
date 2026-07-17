@@ -106,4 +106,57 @@ test.describe('inline diff review mode', () => {
     // The underlying file must not have been touched by typing either.
     expect(fs.readFileSync(filePath, 'utf-8')).toBe(MODIFIED)
   })
+
+  test('per-hunk decisions write the file and the last one exits review', async() => {
+    // Hunk-to-region grouping depends on how jsdiff aligns blank lines, so
+    // assert structure dynamically rather than a hardcoded count.
+    const initialRegions = await page.locator('.review-region').count()
+    expect(initialRegions).toBeGreaterThanOrEqual(2)
+
+    // Reject the code change: disk loses `43`, keeps the still-undecided
+    // paragraph rewrite (FR-10 — rejecting is what removes a change).
+    // The paragraph hunk and the code hunk share one region (only a blank
+    // line + fence-open line separate them, a non-splittable boundary), so
+    // scope to the code hunk's own deleted part rather than the region.
+    const codePart = page.locator('.review-part.review-deleted', { hasText: 'answer = 42' })
+    await codePart.hover()
+    await codePart.locator('.review-hunk-controls .reject').click()
+
+    await expect
+      .poll(() => fs.readFileSync(filePath, 'utf-8'), { timeout: 10000 })
+      .toContain('const answer = 42')
+    expect(fs.readFileSync(filePath, 'utf-8')).toContain('rewritten by an external tool')
+
+    // The decided hunk's own deleted/added parts melt back into plain
+    // content. The region count itself may not drop yet: this fixture's
+    // paragraph hunk and code hunk share one region (only a blank line +
+    // fence between them, a non-splittable boundary), so the region persists
+    // until the still-undecided paragraph hunk is also resolved.
+    await expect(
+      page.locator('.review-part.review-deleted', { hasText: 'answer = 42' })
+    ).toHaveCount(0)
+    await expect(
+      page.locator('.review-part.review-added', { hasText: 'answer = 43' })
+    ).toHaveCount(0)
+    await expect(page.locator('.review-region')).toHaveCount(initialRegions)
+
+    // Accept every remaining hunk; the last decision finalizes the review.
+    for (let guard = 0; guard < 6; guard++) {
+      if ((await page.locator('.review-region').count()) === 0) {
+        break
+      }
+      const region = page.locator('.review-region').first()
+      await region.hover()
+      await region.locator('.review-hunk-controls .accept').first().click()
+      await page.waitForTimeout(300)
+    }
+
+    await expect(page.locator('.review-overlay')).toHaveCount(0, { timeout: 10000 })
+    await expect(page.locator('.editor-wrapper.review')).toHaveCount(0)
+
+    const final = fs.readFileSync(filePath, 'utf-8')
+    expect(final).toContain('const answer = 42')
+    expect(final).toContain('rewritten by an external tool')
+    expect(final).toContain('- item three')
+  })
 })

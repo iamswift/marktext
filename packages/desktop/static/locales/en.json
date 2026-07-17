@@ -937,6 +937,16 @@
       "reloadFromDisk": "Reload"
     }
   },
+  "review": {
+    "accept": "Accept",
+    "acceptHint": "Keep this change",
+    "reject": "Reject",
+    "rejectHint": "Discard this change and restore your text",
+    "edit": "Edit",
+    "editHint": "Modify this change before accepting it",
+    "confirmEdit": "Save edit",
+    "cancelEdit": "Cancel"
+  },
   "spellchecker": {
     "failedToRemoveWord": "Failed to remove word from dictionary",
     "unexpectedError": "Unexpected spellchecker error"

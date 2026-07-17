@@ -25,8 +25,16 @@
             class="review-part"
             :class="`review-${part.role}`"
             :data-hunk-id="part.hunkId"
-            v-html="part.html"
-          />
+          >
+            <review-hunk-controls
+              v-if="part.hunkId && isFirstPartOfHunk(segment, partIndex)"
+              :hunk-id="part.hunkId"
+            />
+            <div
+              class="review-part-content"
+              v-html="part.html"
+            />
+          </div>
         </div>
       </template>
     </div>
@@ -39,6 +47,7 @@ import { renderToStaticHTML } from '@muyajs/core'
 import { annotateMerged, computeRegions } from 'common/diff/regions'
 import { useReviewStore } from '@/store/review'
 import { applyWordMarks } from '@/util/reviewWordMarks'
+import ReviewHunkControls from './reviewHunkControls.vue'
 
 interface RenderedPart {
   role: 'context' | 'deleted' | 'added'
@@ -123,6 +132,17 @@ const renderedSegments = computed<RenderedSegment[]>(() => {
 const isActiveRegion = (segment: { hunkIds: string[] }): boolean =>
   reviewStore.activeHunkId !== null && segment.hunkIds.includes(reviewStore.activeHunkId)
 
+const isFirstPartOfHunk = (
+  segment: { parts: RenderedPart[] },
+  partIndex: number
+): boolean => {
+  const { hunkId } = segment.parts[partIndex]
+  if (!hunkId) {
+    return false
+  }
+  return segment.parts.findIndex((p) => p.hunkId === hunkId) === partIndex
+}
+
 onMounted(() => {
   // Takes keyboard focus away from the (neutralized) contenteditable editor.
   overlayRef.value?.focus()
@@ -148,9 +168,16 @@ onMounted(() => {
 }
 
 .review-part {
+  position: relative;
   border-radius: 3px;
   padding: 2px 8px;
   margin: 2px 0;
+}
+
+.review-region:hover :deep(.review-hunk-controls),
+.review-region.active :deep(.review-hunk-controls) {
+  opacity: 1;
+  pointer-events: auto;
 }
 
 .review-deleted {
