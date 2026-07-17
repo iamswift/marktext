@@ -31,6 +31,14 @@
 
   --focusColor: var(--themeColor);
 
+  /* Inline diff review (other themes inherit the component fallbacks). */
+  --diffAddedBg: rgba(87, 171, 90, 0.18);
+  --diffDeletedBg: rgba(229, 83, 75, 0.16);
+  --diffAddedWordBg: rgba(87, 171, 90, 0.4);
+  --diffDeletedWordBg: rgba(229, 83, 75, 0.4);
+  --diffDeletedStroke: rgba(229, 83, 75, 0.6);
+  --diffActiveOutline: var(--themeColor);
+
   --buttonFontColor: rgba(255, 255, 255, 0.6);
   --buttonBgColor: #424344;
   --buttonBorder: 1px solid rgba(0, 0, 0, 0.2);

@@ -14,6 +14,14 @@ export interface RegionPart {
   role: 'context' | 'deleted' | 'added'
   hunkId?: string
   markdown: string
+  /**
+   * The opening fence line (e.g. "```js") when this part's lines live inside
+   * a fenced code block. Renderers re-wrap the part in that fence so a
+   * changed line inside a code block still renders as code.
+   */
+  fence?: string
+  /** True when the part is only the fence delimiter line(s) themselves. */
+  fenceDelimiter?: boolean
 }
 
 export type ReviewSegment =
@@ -88,6 +96,66 @@ export function computeUnsafeLineFlags(lines: readonly string[]): boolean[] {
   return flags
 }
 
+export type FenceContext =
+  | { kind: 'outside' }
+  | { kind: 'delimiter'; header: string }
+  | { kind: 'body'; header: string }
+
+/**
+ * Classifies every line against fenced code blocks: the open/close delimiter
+ * lines, the body lines between them (tagged with the opening header so they
+ * can be re-fenced for standalone rendering), and everything else. Front
+ * matter is treated as outside — fences are not recognized within it.
+ */
+export function computeFenceContexts(lines: readonly string[]): FenceContext[] {
+  const contexts: FenceContext[] = new Array(lines.length).fill({ kind: 'outside' })
+  if (lines.length === 0) {
+    return contexts
+  }
+
+  let i = 0
+  if (lines[0] === '---') {
+    for (let j = 1; j < lines.length; j++) {
+      if (lines[j] === '---' || lines[j] === '...') {
+        i = j + 1
+        break
+      }
+    }
+  }
+
+  while (i < lines.length) {
+    const open = lines[i].match(FENCE_OPEN_REG)
+    if (!open || (open[1][0] === '`' && open[2].includes('`'))) {
+      i++
+      continue
+    }
+
+    const header = lines[i]
+    const fenceChar = open[1][0]
+    const fenceLength = open[1].length
+    contexts[i] = { kind: 'delimiter', header }
+    i++
+
+    while (i < lines.length) {
+      const close = lines[i].match(FENCE_OPEN_REG)
+      if (
+        close &&
+        close[1][0] === fenceChar &&
+        close[1].length >= fenceLength &&
+        FENCE_CLOSE_TAIL_REG.test(close[2])
+      ) {
+        contexts[i] = { kind: 'delimiter', header }
+        i++
+        break
+      }
+      contexts[i] = { kind: 'body', header }
+      i++
+    }
+  }
+
+  return contexts
+}
+
 /**
  * Produces the merged review document as annotated lines: context from the
  * baseline, decided hunks melted into context via their resolution, undecided
@@ -147,7 +215,10 @@ export function computeRegions(annotated: readonly AnnotatedLine[]): ReviewSegme
   }
 
   const unsafe = new Array<boolean>(n).fill(false)
-  const markViewUnsafe = (exclude: AnnotatedLineKind): void => {
+  // Fence classification per annotated line, taken from the view the line
+  // actually exists in: baseline (context + del) or proposed (context + add).
+  const fenceCtx: FenceContext[] = new Array(n).fill({ kind: 'outside' })
+  const markView = (exclude: AnnotatedLineKind): void => {
     const indices: number[] = []
     const texts: string[] = []
     for (let i = 0; i < n; i++) {
@@ -157,14 +228,19 @@ export function computeRegions(annotated: readonly AnnotatedLine[]): ReviewSegme
       }
     }
     const flags = computeUnsafeLineFlags(texts)
+    const contexts = computeFenceContexts(texts)
     for (let k = 0; k < indices.length; k++) {
       if (flags[k]) {
         unsafe[indices[k]] = true
       }
+      if (contexts[k].kind !== 'outside') {
+        fenceCtx[indices[k]] = contexts[k]
+      }
     }
   }
-  markViewUnsafe('add')
-  markViewUnsafe('del')
+  // Proposed view first so baseline classification wins for context lines.
+  markView('del')
+  markView('add')
 
   const isSafeBoundaryBefore = (i: number): boolean =>
     annotated[i - 1].text.trim() === '' && !unsafe[i - 1] && !unsafe[i]
@@ -187,14 +263,24 @@ export function computeRegions(annotated: readonly AnnotatedLine[]): ReviewSegme
 
     const parts: RegionPart[] = []
     const hunkIds: string[] = []
-    for (const line of lines) {
+    for (let i = start; i < end; i++) {
+      const line = annotated[i]
+      const ctx = fenceCtx[i]
       const role =
         line.kind === 'context' ? 'context' : line.kind === 'del' ? 'deleted' : 'added'
+      const fence = ctx.kind === 'body' ? ctx.header : undefined
+      const fenceDelimiter = ctx.kind === 'delimiter' ? true : undefined
       const prev = parts[parts.length - 1]
-      if (prev && prev.role === role && prev.hunkId === line.hunkId) {
+      if (
+        prev &&
+        prev.role === role &&
+        prev.hunkId === line.hunkId &&
+        prev.fence === fence &&
+        prev.fenceDelimiter === fenceDelimiter
+      ) {
         prev.markdown += `\n${line.text}`
       } else {
-        parts.push({ role, hunkId: line.hunkId, markdown: line.text })
+        parts.push({ role, hunkId: line.hunkId, markdown: line.text, fence, fenceDelimiter })
       }
       if (line.hunkId && !hunkIds.includes(line.hunkId)) {
         hunkIds.push(line.hunkId)

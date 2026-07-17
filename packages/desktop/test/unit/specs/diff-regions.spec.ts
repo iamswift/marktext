@@ -3,6 +3,7 @@ import { computeHunks } from 'common/diff'
 import type { HunkDecision } from 'common/diff/resolve'
 import {
   annotateMerged,
+  computeFenceContexts,
   computeRegions,
   computeUnsafeLineFlags
 } from 'common/diff/regions'
@@ -42,6 +43,27 @@ describe('computeUnsafeLineFlags', () => {
   })
 })
 
+describe('computeFenceContexts', () => {
+  it('classifies delimiters and body lines with the opening header', () => {
+    expect(computeFenceContexts(['x', '```js', 'code', '```', 'y'])).toEqual([
+      { kind: 'outside' },
+      { kind: 'delimiter', header: '```js' },
+      { kind: 'body', header: '```js' },
+      { kind: 'delimiter', header: '```js' },
+      { kind: 'outside' }
+    ])
+  })
+
+  it('does not recognize fences inside front matter', () => {
+    expect(computeFenceContexts(['---', '```', '---', 'x'])).toEqual([
+      { kind: 'outside' },
+      { kind: 'outside' },
+      { kind: 'outside' },
+      { kind: 'outside' }
+    ])
+  })
+})
+
 describe('annotateMerged', () => {
   it('expands an undecided hunk to deleted then added lines', () => {
     const base = 'a\nold\nc'
@@ -77,10 +99,12 @@ describe('computeRegions', () => {
       kind: 'region',
       hunkIds: ['h0'],
       parts: [
-        { role: 'context', markdown: 'para\n\n```js' },
-        { role: 'deleted', hunkId: 'h0', markdown: 'old code' },
-        { role: 'added', hunkId: 'h0', markdown: 'new code' },
-        { role: 'context', markdown: '```\n' }
+        { role: 'context', markdown: 'para\n' },
+        { role: 'context', markdown: '```js', fenceDelimiter: true },
+        { role: 'deleted', hunkId: 'h0', markdown: 'old code', fence: '```js' },
+        { role: 'added', hunkId: 'h0', markdown: 'new code', fence: '```js' },
+        { role: 'context', markdown: '```', fenceDelimiter: true },
+        { role: 'context', markdown: '' }
       ]
     })
     expect(segments[1]).toEqual({ kind: 'unchanged', markdown: 'tail' })
@@ -128,7 +152,9 @@ describe('computeRegions', () => {
     const region = segments.find((s) => s.kind === 'region')
     expect(region).toMatchObject({
       kind: 'region',
-      parts: expect.arrayContaining([{ role: 'added', hunkId: 'h0', markdown: 'z' }])
+      parts: expect.arrayContaining([
+        expect.objectContaining({ role: 'added', hunkId: 'h0', markdown: 'z' })
+      ])
     })
   })
 })

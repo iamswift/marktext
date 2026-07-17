@@ -1,7 +1,7 @@
 <template>
   <div
     class="editor-wrapper"
-    :class="[{ typewriter: typewriter, focus: focus, source: sourceCode }]"
+    :class="[{ typewriter: typewriter, focus: focus, source: sourceCode, review: isReviewing }]"
     :dir="textDirection"
   >
     <div
@@ -77,7 +77,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, reactive, watch, onMounted, onBeforeUnmount, nextTick, markRaw } from 'vue'
+import { ref, reactive, computed, watch, onMounted, onBeforeUnmount, nextTick, markRaw } from 'vue'
 import log from 'electron-log'
 import {
   Muya,
@@ -129,6 +129,7 @@ import { addCommonStyle, setEditorWidth } from '@/util/theme'
 import { usePreferencesStore } from '@/store/preferences'
 import { useEditorStore } from '@/store/editor'
 import { useProjectStore } from '@/store/project'
+import { useReviewStore } from '@/store/review'
 import { storeToRefs } from 'pinia'
 import { useI18n } from 'vue-i18n'
 import { SyntheticHistory, type IFileHistoryLike } from './syntheticHistory'
@@ -258,6 +259,13 @@ const { currentFile, tabs } = storeToRefs(editorStore)
 // Project store refs
 const { projectTree } = storeToRefs(projectStore)
 
+// Review mode neutralizes the live editor exactly like source mode does
+// (z-index -1 + pointer-events none via the `review` wrapper class).
+const reviewStore = useReviewStore()
+const isReviewing = computed(
+  () => reviewStore.active && reviewStore.tabId === currentFile.value?.id
+)
+
 // Component state
 const defaultFontFamily = DEFAULT_EDITOR_FONT_FAMILY
 const resolveEditorFont = (family: string): string =>
@@ -265,6 +273,13 @@ const resolveEditorFont = (family: string): string =>
 const resolveCodeFont = (family: string): string => `${family}, ${DEFAULT_CODE_FONT_FAMILY}`
 const selectionChange = ref<unknown>(null)
 const editor = ref<MuyaInstance>(null)
+
+watch(isReviewing, (value) => {
+  if (value && editor.value) {
+    editor.value.hideAllFloatTools()
+    editor.value.blur()
+  }
+})
 const isShowClose = ref(false)
 const dialogTableVisible = ref(false)
 const imageViewerVisible = ref<boolean | null>(null)
@@ -2065,7 +2080,8 @@ onBeforeUnmount(() => {
   }
 }
 
-.editor-wrapper.source {
+.editor-wrapper.source,
+.editor-wrapper.review {
   position: absolute;
   z-index: -1;
   top: 0;
@@ -2074,7 +2090,8 @@ onBeforeUnmount(() => {
   /* `z-index: -1` only hides the editor visually; `document.elementsFromPoint`
      ignores stacking, so muya's mousemove-driven float tools (front button/menu,
      table drag/column toolbars, preview toolbar) still re-trigger over the source
-     editor. Drop the subtree from hit-testing too so they cannot (#4731). */
+     editor. Drop the subtree from hit-testing too so they cannot (#4731). The
+     review overlay neutralizes the editor the same way (FR-8). */
   pointer-events: none;
 }
 

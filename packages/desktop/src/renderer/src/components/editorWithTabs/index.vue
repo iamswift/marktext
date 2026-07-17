@@ -17,18 +17,23 @@
         :muya-index-cursor="muyaIndexCursor"
         :text-direction="textDirection"
       />
+      <review-overlay v-if="reviewVisible" />
     </div>
     <tab-notifications />
   </div>
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
+import { useEditorStore } from '@/store/editor'
 import { useLayoutStore } from '@/store/layout'
+import { useReviewStore } from '@/store/review'
 import { storeToRefs } from 'pinia'
 import Tabs from './tabs.vue'
 import Editor from './editor.vue'
 import SourceCode from './sourceCode.vue'
 import TabNotifications from './notifications.vue'
+import ReviewOverlay from './reviewOverlay.vue'
 
 defineProps<{
   markdown: string
@@ -44,6 +49,12 @@ defineProps<{
 }>()
 
 const { effectiveSideBarWidth } = storeToRefs(useLayoutStore())
+
+const editorStore = useEditorStore()
+const reviewStore = useReviewStore()
+const reviewVisible = computed(
+  () => reviewStore.active && reviewStore.tabId === editorStore.currentFile?.id
+)
 </script>
 
 <style scoped>
