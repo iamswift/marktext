@@ -69,6 +69,10 @@ export interface IpcInvokeChannels {
   }
   'mt::keybinding-save-user-keybindings': { args: [bindings: unknown]; ret: boolean }
   'mt::paths::is-image': { args: [path: string]; ret: boolean }
+  // Review-mode hunk write-back: unlike mt::response-file-save it never opens
+  // a save dialog, never marks the tab saved, and reports failure by
+  // rejection so the review store can keep its decisions and offer a retry.
+  'mt::review-write-file': { args: [pathname: string, markdown: string, options: SaveOptions]; ret: void }
   'mt::rg::start': { args: [req: unknown]; ret: { searchId: string } }
   'mt::shell::open-external': { args: [url: string]; ret: void }
   'mt::shell::open-path': { args: [fullPath: string]; ret: string }
