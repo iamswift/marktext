@@ -75,6 +75,11 @@ const reviewVisible = computed(
   overflow: hidden;
   background: var(--editorBgColor);
   & > .container {
+    /* Positioning context for the absolutely-positioned .review-container
+       below, so it fills only the area under the tab bar rather than the
+       whole .editor-with-tabs (which would overlap the tabs — visible on
+       narrow screens). */
+    position: relative;
     flex: 1;
     overflow: hidden;
   }
