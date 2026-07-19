@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { computeLineWordDiff } from 'common/diff/wordDiff'
+import { computeLineWordDiff, computeMergedWordDiff } from 'common/diff/wordDiff'
 
 describe('computeLineWordDiff', () => {
   it('marks a replaced word as changed on both sides', () => {
@@ -32,5 +32,61 @@ describe('computeLineWordDiff', () => {
     const result = computeLineWordDiff('a b', 'a  b')
     expect(result.prop.map((s) => s.text).join('')).toBe('a  b')
     expect(result.prop.some((s) => s.changed === true)).toBe(true)
+  })
+})
+
+describe('computeMergedWordDiff', () => {
+  // Exact whitespace attachment below is jsdiff's, verified against the library
+  // rather than assumed. The load-bearing invariants — asserted throughout — are
+  // that prop spans concatenate to the proposed text and every deletion offset
+  // indexes into it, which is what the inline renderer relies on.
+  it('returns prop spans covering the whole proposed text', () => {
+    const { prop } = computeMergedWordDiff('the priting industry', 'the printing industry')
+    expect(prop.map((s) => s.text).join('')).toBe('the printing industry')
+    expect(prop.filter((s) => s.changed).map((s) => s.text)).toEqual(['printing'])
+  })
+
+  it('anchors a deletion at its offset in the proposed text', () => {
+    const propText = 'keep this here'
+    const { prop, deletions } = computeMergedWordDiff('keep this extra word here', propText)
+    expect(deletions).toEqual([{ text: 'extra word ', offset: 'keep this '.length }])
+    expect(prop.map((s) => s.text).join('')).toBe(propText)
+    expect(propText.slice(0, deletions[0].offset)).toBe('keep this ')
+  })
+
+  it('anchors a replacement deletion at the start of its replacement run', () => {
+    const { prop, deletions } = computeMergedWordDiff('aaa bbb ccc', 'aaa xxx ccc')
+    expect(deletions).toEqual([{ text: 'bbb', offset: 'aaa '.length }])
+    expect(prop.filter((s) => s.changed).map((s) => s.text)).toEqual(['xxx'])
+  })
+
+  it('merges adjacent removed parts into one deletion run', () => {
+    const { deletions } = computeMergedWordDiff('a one two b', 'a b')
+    expect(deletions).toHaveLength(1)
+    expect(deletions[0].text).toBe('one two ')
+  })
+
+  it('returns no deletions when nothing was removed', () => {
+    const { prop, deletions } = computeMergedWordDiff('same text', 'same text plus more')
+    expect(deletions).toEqual([])
+    expect(prop.map((s) => s.text).join('')).toBe('same text plus more')
+  })
+
+  it('keeps every deletion offset within the proposed text', () => {
+    const propText = 'as a result generated text stays entirely free of strange words'
+    const { prop, deletions } = computeMergedWordDiff(
+      'the generated text is therefore always free from strange words',
+      propText
+    )
+    expect(prop.map((s) => s.text).join('')).toBe(propText)
+    expect(deletions.length).toBeGreaterThan(0)
+    for (const run of deletions) {
+      expect(run.offset).toBeGreaterThanOrEqual(0)
+      expect(run.offset).toBeLessThanOrEqual(propText.length)
+    }
+    // offsets are non-decreasing, so splicing last-to-first cannot invalidate an
+    // earlier anchor
+    const offsets = deletions.map((d) => d.offset)
+    expect([...offsets].sort((a, b) => a - b)).toEqual(offsets)
   })
 })
