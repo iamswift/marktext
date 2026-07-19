@@ -56,11 +56,12 @@ import { renderToStaticHTML } from '@muyajs/core'
 import { annotateMerged, computeRegions } from 'common/diff/regions'
 import { useReviewStore } from '@/store/review'
 import { applyWordMarks } from '@/util/reviewWordMarks'
+import { applyInlineMerge, isSingleParagraph } from '@/util/reviewInlineMerge'
 import ReviewHunkControls from './reviewHunkControls.vue'
 import ReviewHunkEditor from './reviewHunkEditor.vue'
 
 interface RenderedPart {
-  role: 'context' | 'deleted' | 'added'
+  role: 'context' | 'deleted' | 'added' | 'merged'
   hunkId?: string
   html: string
 }
@@ -127,11 +128,27 @@ const renderedSegments = computed<RenderedSegment[]>(() => {
         const addedEl = document.createElement('div')
         deletedEl.innerHTML = deleted.html
         addedEl.innerHTML = added.html
-        applyWordMarks(deletedEl, addedEl)
-        deleted.html = deletedEl.innerHTML
-        added.html = addedEl.innerHTML
+
+        // The merged view can only be drawn when both sides are one flowing
+        // paragraph; lists, code and multi-block fragments always stack.
+        const wantInline =
+          reviewStore.viewFor(hunkId) === 'inline' &&
+          isSingleParagraph(deletedEl) &&
+          isSingleParagraph(addedEl)
+
+        if (wantInline) {
+          applyInlineMerge(deletedEl.textContent ?? '', addedEl)
+          added.html = addedEl.innerHTML
+          added.role = 'merged'
+          parts.splice(parts.indexOf(deleted), 1)
+        } else {
+          applyWordMarks(deletedEl, addedEl)
+          deleted.html = deletedEl.innerHTML
+          added.html = addedEl.innerHTML
+        }
       } catch {
-        // Word marks are progressive enhancement; the block tint remains.
+        // Word marks and the merged view are progressive enhancement; on
+        // failure the untouched pair still renders with its block tint.
       }
     }
 
@@ -256,11 +273,25 @@ const onKeydown = (event: KeyboardEvent): void => {
   line-height: 1.6;
 }
 
+/* Rendered markdown fragments bring their own <p> margins (user-agent
+   default ~1em top/bottom); left alone, that stacks with .review-part's
+   own margin and inflates the gap around every diff block. Reset them and
+   let .review-segment/.review-part control spacing explicitly instead. */
+.review-document :deep(p) {
+  margin: 0;
+}
+
+.review-segment + .review-region,
+.review-region + .review-segment,
+.review-segment + .review-segment {
+  margin-top: 8px;
+}
+
 .review-part {
   position: relative;
   border-radius: 3px;
   padding: 2px 8px;
-  margin: 2px 0;
+  margin: 1px 0;
 }
 
 .review-region:hover :deep(.review-hunk-controls),
@@ -279,6 +310,12 @@ const onKeydown = (event: KeyboardEvent): void => {
   background: var(--diffAddedBg, rgba(70, 180, 100, 0.14));
 }
 
+/* The merged view carries no block tint: it holds both sides at once, so the
+   word-level marks below are what distinguish them. */
+.review-merged {
+  background: var(--diffMergedBg, transparent);
+}
+
 .review-region.active {
   outline: 2px solid var(--diffActiveOutline, var(--themeColor));
   outline-offset: 2px;
@@ -293,6 +330,15 @@ const onKeydown = (event: KeyboardEvent): void => {
 .review-document :deep(.review-word-add) {
   background: var(--diffAddedWordBg, rgba(70, 180, 100, 0.35));
   border-radius: 2px;
+}
+
+/* Only the merged view emits a <del> element — stacked deletions are spans
+   inside an already struck-through block, so this cannot double up on them. */
+.review-document :deep(del.review-word-del) {
+  text-decoration: line-through;
+  text-decoration-color: var(--diffDeletedStroke, rgba(220, 80, 80, 0.55));
+  text-decoration-thickness: 1.5px;
+  padding: 0 2px;
 }
 
 /* Keep rendered fragments legible with editor-like typography. */

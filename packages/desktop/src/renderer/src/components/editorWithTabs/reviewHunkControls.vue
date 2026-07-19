@@ -21,16 +21,31 @@
     >
       {{ t('review.edit') }}
     </button>
+    <button
+      class="control toggle-view"
+      :title="t('review.toggleViewHint')"
+      @click.stop="toggleView"
+    >
+      {{ toggleLabel }}
+    </button>
   </div>
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useReviewStore } from '@/store/review'
 import { t } from '../../i18n'
 
 const props = defineProps<{ hunkId: string }>()
 
 const reviewStore = useReviewStore()
+
+// Names the view the button switches TO, not the one currently showing.
+const toggleLabel = computed(() =>
+  reviewStore.viewFor(props.hunkId) === 'inline'
+    ? t('review.viewStacked')
+    : t('review.viewInline')
+)
 
 const accept = (): void => {
   reviewStore.decide(props.hunkId, { kind: 'accept' }).catch(console.error)
@@ -40,6 +55,9 @@ const reject = (): void => {
 }
 const edit = (): void => {
   reviewStore.beginEdit(props.hunkId)
+}
+const toggleView = (): void => {
+  reviewStore.toggleView(props.hunkId)
 }
 </script>
 
