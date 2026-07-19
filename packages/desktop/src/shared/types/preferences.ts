@@ -10,6 +10,7 @@ export interface IUserPreferences {
   autoSave?: boolean
   autoSaveDelay?: number
   fileChangeAction?: 'ask' | 'review' | 'reload'
+  reviewDiffLayout?: 'auto' | 'inline' | 'stacked'
   titleBarStyle?: 'custom' | 'native'
   openFilesInNewWindow?: boolean
   openFolderInNewWindow?: boolean

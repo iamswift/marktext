@@ -446,6 +446,12 @@
         "review": "Review changes inline",
         "reload": "Reload automatically"
       },
+      "reviewDiffLayout": {
+        "title": "Review layout for each change",
+        "auto": "Automatic — by size of change",
+        "inline": "Always merged into the paragraph",
+        "stacked": "Always before/after comparison"
+      },
       "window": {
         "title": "Window",
         "titleBarStyle": {

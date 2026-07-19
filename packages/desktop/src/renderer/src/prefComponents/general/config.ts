@@ -16,6 +16,21 @@ export const getFileChangeActionOptions = (): PrefSelectOption<string>[] => [
   }
 ]
 
+export const getReviewDiffLayoutOptions = (): PrefSelectOption<string>[] => [
+  {
+    label: t('preferences.general.reviewDiffLayout.auto'),
+    value: 'auto'
+  },
+  {
+    label: t('preferences.general.reviewDiffLayout.inline'),
+    value: 'inline'
+  },
+  {
+    label: t('preferences.general.reviewDiffLayout.stacked'),
+    value: 'stacked'
+  }
+]
+
 export const getTitleBarStyleOptions = (): PrefSelectOption<string>[] => [
   {
     label: t('preferences.general.window.titleBarStyle.custom'),

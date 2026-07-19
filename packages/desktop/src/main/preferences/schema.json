@@ -15,6 +15,11 @@
     "enum": ["ask", "review", "reload"],
     "default": "ask"
   },
+  "reviewDiffLayout": {
+    "description": "General--How review mode lays out each change: automatically by size, always merged into the paragraph, or always as a before/after comparison.",
+    "enum": ["auto", "inline", "stacked"],
+    "default": "auto"
+  },
   "titleBarStyle": {
     "description": "General--The title bar style (Windows and Linux system only).",
     "enum": ["custom", "native"],

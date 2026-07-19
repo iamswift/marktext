@@ -28,6 +28,12 @@
           :options="getFileChangeActionOptions()"
           :on-change="(value) => onSelectChange('fileChangeAction', value)"
         />
+        <cur-select
+          :description="t('preferences.general.reviewDiffLayout.title')"
+          :value="reviewDiffLayout"
+          :options="getReviewDiffLayoutOptions()"
+          :on-change="(value) => onSelectChange('reviewDiffLayout', value)"
+        />
       </template>
     </compound>
 
@@ -203,6 +209,7 @@ import { isOsx } from '@/util'
 
 import {
   getFileChangeActionOptions,
+  getReviewDiffLayoutOptions,
   getTitleBarStyleOptions,
   zoomOptions,
   getFileSortByOptions,
@@ -217,6 +224,7 @@ const {
   autoSave,
   autoSaveDelay,
   fileChangeAction,
+  reviewDiffLayout,
   titleBarStyle,
   defaultDirectoryToOpen,
   openFilesInNewWindow,

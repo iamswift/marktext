@@ -26,6 +26,7 @@ export interface PreferencesState {
   autoSave: boolean
   autoSaveDelay: number
   fileChangeAction: 'ask' | 'review' | 'reload'
+  reviewDiffLayout: 'auto' | 'inline' | 'stacked'
   titleBarStyle: TitleBarStyle | string
   openFilesInNewWindow: boolean
   openFolderInNewWindow: boolean
@@ -145,6 +146,7 @@ export const usePreferencesStore = defineStore('preferences', {
     autoSave: false,
     autoSaveDelay: 5000,
     fileChangeAction: 'ask',
+    reviewDiffLayout: 'auto',
     titleBarStyle: 'custom',
     openFilesInNewWindow: false,
     openFolderInNewWindow: false,
