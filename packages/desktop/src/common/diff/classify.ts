@@ -62,3 +62,25 @@ export function computeHunkMetrics(hunk: DiffHunk): HunkMetrics {
     linesAfter: hunk.proposedLines.length
   }
 }
+
+/**
+ * Decide the default rendering for a hunk. Rule: "max run + structure",
+ * selected via the mockup rule lab. Line count is deliberately NOT a size
+ * signal — a two-paragraph hunk of one-word fixes must stay inline — it is
+ * only a structure signal (split/merge cannot be shown in one paragraph).
+ * The user can override per hunk (store) or globally (reviewDiffLayout).
+ */
+export function classifyHunk(hunk: DiffHunk): ReviewViewKind {
+  if (hunk.type !== 'replace') {
+    // add/delete hunks render as one tinted block; there is no pair to stack.
+    return 'inline'
+  }
+  const metrics = computeHunkMetrics(hunk)
+  if (metrics.linesBefore !== metrics.linesAfter) {
+    return 'stacked'
+  }
+  if (metrics.maxRunWords > INLINE_MAX_RUN_WORDS) {
+    return 'stacked'
+  }
+  return 'inline'
+}

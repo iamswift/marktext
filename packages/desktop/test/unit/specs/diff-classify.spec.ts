@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { DiffHunk } from 'common/diff'
-import { computeHunkMetrics } from 'common/diff/classify'
+import { classifyHunk, computeHunkMetrics } from 'common/diff/classify'
 
 const replaceHunk = (baselineLines: string[], proposedLines: string[]): DiffHunk => ({
   id: 'h0',
@@ -10,6 +10,28 @@ const replaceHunk = (baselineLines: string[], proposedLines: string[]): DiffHunk
   baselineLines,
   proposedStart: 0,
   proposedLines,
+  contentKey: 'test'
+})
+
+const addHunk = (proposedLines: string[]): DiffHunk => ({
+  id: 'h0',
+  index: 0,
+  type: 'add',
+  baselineStart: 0,
+  baselineLines: [],
+  proposedStart: 0,
+  proposedLines,
+  contentKey: 'test'
+})
+
+const deleteHunk = (baselineLines: string[]): DiffHunk => ({
+  id: 'h0',
+  index: 0,
+  type: 'delete',
+  baselineStart: 0,
+  baselineLines,
+  proposedStart: 0,
+  proposedLines: [],
   contentKey: 'test'
 })
 
@@ -56,5 +78,64 @@ describe('computeHunkMetrics', () => {
   it('reports zero runs for identical text', () => {
     const m = computeHunkMetrics(replaceHunk(['same'], ['same']))
     expect(m).toEqual({ maxRunWords: 0, runCount: 0, linesBefore: 1, linesAfter: 1 })
+  })
+})
+
+describe('classifyHunk', () => {
+  it('keeps small word fixes inline, even across multiple lines', () => {
+    expect(classifyHunk(replaceHunk(['the priting industry'], ['the printing industry']))).toBe(
+      'inline'
+    )
+    expect(
+      classifyHunk(
+        replaceHunk(
+          ['first lien here', 'second lyne here'],
+          ['first line here', 'second line here']
+        )
+      )
+    ).toBe('inline')
+  })
+
+  it('stacks a hunk whose largest single edit exceeds the run threshold', () => {
+    // One contiguous rewrite sharing no words with its replacement: 6 struck +
+    // 6 replacement = 12, over the 8-word bar. A rewrite that happens to reuse
+    // words mid-phrase reads as several small edits instead — see the
+    // fragmentation case below, which stays inline by design.
+    expect(
+      classifyHunk(
+        replaceHunk(
+          ['keep this intro then everything here is completely different wording'],
+          ['keep this intro then a totally fresh sentence appears instead']
+        )
+      )
+    ).toBe('stacked')
+  })
+
+  it('stacks a paragraph split or merge regardless of edit size', () => {
+    expect(
+      classifyHunk(
+        replaceHunk(['one long paragraph that gets split'], ['one long paragraph', 'that gets split'])
+      )
+    ).toBe('stacked')
+  })
+
+  it('always renders pure add and pure delete hunks inline (they are a single block)', () => {
+    expect(classifyHunk(addHunk(['a whole new paragraph with quite a lot of words in it']))).toBe(
+      'inline'
+    )
+    expect(
+      classifyHunk(deleteHunk(['a whole removed paragraph with quite a lot of words in it']))
+    ).toBe('inline')
+  })
+
+  it('keeps many small edits inline (no fragmentation rule)', () => {
+    expect(
+      classifyHunk(
+        replaceHunk(
+          ['the text is here and the text is there and the text is everywhere in the text'],
+          ['the copy is here and the copy is there and the copy is everywhere in the copy']
+        )
+      )
+    ).toBe('inline')
   })
 })
