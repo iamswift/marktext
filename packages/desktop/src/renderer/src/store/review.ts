@@ -1,8 +1,10 @@
 import { defineStore } from 'pinia'
 import { toRaw } from 'vue'
 import { computeHunks, normalizeText, type DiffHunk } from 'common/diff'
+import { classifyHunk, type ReviewViewKind } from 'common/diff/classify'
 import { resolveDocument, type HunkDecision } from 'common/diff/resolve'
 import { useEditorStore } from './editor'
+import { usePreferencesStore } from './preferences'
 import { t } from '../i18n'
 import type { IFileState, LineEnding, SaveOptions } from '@shared/types/files'
 
@@ -44,6 +46,12 @@ interface ReviewState {
   baselineWasUnsaved: boolean
   hunks: DiffHunk[]
   decisions: Map<string, HunkDecision>
+  /**
+   * Per-hunk hand overrides of the classified view. Session-scoped: hunk ids
+   * are re-keyed whenever the review restarts, so a stale override would
+   * otherwise land on an unrelated hunk.
+   */
+  viewOverrides: Map<string, ReviewViewKind>
   activeHunkId: string | null
   editingHunkId: string | null
   diskMeta: ReviewChangeData | null
@@ -60,6 +68,7 @@ const initialState = (): ReviewState => ({
   baselineWasUnsaved: false,
   hunks: [],
   decisions: new Map(),
+  viewOverrides: new Map(),
   activeHunkId: null,
   editingHunkId: null,
   diskMeta: null,
@@ -75,6 +84,25 @@ export const useReviewStore = defineStore('review', {
       state.hunks.filter((hunk) => !state.decisions.has(hunk.id)),
     remainingCount(): number {
       return this.undecidedHunks.length
+    },
+    /**
+     * How a hunk should render, in precedence order: a hand override, then a
+     * non-auto layout preference, then the classifier. Presentation only — it
+     * never affects how a decision resolves.
+     */
+    viewFor() {
+      return (hunkId: string): ReviewViewKind => {
+        const override = this.viewOverrides.get(hunkId)
+        if (override) {
+          return override
+        }
+        const layout = usePreferencesStore().reviewDiffLayout ?? 'auto'
+        if (layout !== 'auto') {
+          return layout
+        }
+        const hunk = this.hunks.find((candidate) => candidate.id === hunkId)
+        return hunk ? classifyHunk(hunk) : 'stacked'
+      }
     }
   },
 
@@ -110,6 +138,7 @@ export const useReviewStore = defineStore('review', {
         baselineWasUnsaved: wasUnsaved,
         hunks,
         decisions: new Map(),
+        viewOverrides: new Map(),
         activeHunkId: hunks[0].id,
         editingHunkId: null,
         diskMeta: change.data,
@@ -121,6 +150,12 @@ export const useReviewStore = defineStore('review', {
 
     exitReview(): void {
       Object.assign(this, initialState())
+    },
+
+    /** Flips one hunk between the merged and before/after renderings. */
+    toggleView(hunkId: string): void {
+      const current = this.viewFor(hunkId)
+      this.viewOverrides.set(hunkId, current === 'inline' ? 'stacked' : 'inline')
     },
 
     /**
@@ -325,6 +360,9 @@ export const useReviewStore = defineStore('review', {
         proposedText: change.data.markdown,
         hunks: newHunks,
         decisions: carried,
+        // Decisions are carried across by contentKey, but views are not: the
+        // ids they were keyed to no longer refer to the same hunks.
+        viewOverrides: new Map(),
         activeHunkId: newHunks.find((hunk) => !carried.has(hunk.id))?.id ?? null,
         editingHunkId: null,
         diskMeta: change.data,
