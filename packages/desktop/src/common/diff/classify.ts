@@ -82,25 +82,5 @@ export function classifyHunk(hunk: DiffHunk): ReviewViewKind {
   if (metrics.maxRunWords > INLINE_MAX_RUN_WORDS) {
     return 'stacked'
   }
-  // Secondary guard: jsdiff's LCS can fragment a large rewrite across incidental
-  // equal anchors (e.g. a shared noun embedded in two changed phrases), keeping
-  // every individual run under the threshold even though the reader would be
-  // parsing a sentence that is substantially different. Summing all changed words
-  // catches this without acting as a fragmentation rule — it only triggers when
-  // the hunk's aggregate change clearly exceeds the inline threshold.
-  if (totalChangedWords(hunk) > INLINE_MAX_RUN_WORDS) {
-    return 'stacked'
-  }
   return 'inline'
-}
-
-function totalChangedWords(hunk: DiffHunk): number {
-  const parts = diffWordsWithSpace(hunk.baselineLines.join('\n'), hunk.proposedLines.join('\n'))
-  let total = 0
-  for (const part of parts) {
-    if (part.added || part.removed) {
-      total += wordCount(part.value)
-    }
-  }
-  return total
 }
