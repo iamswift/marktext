@@ -385,10 +385,15 @@ test.describe('inline diff review mode: source-mode guard and mid-review concurr
     await restartButton.click()
 
     // The overlay now reflects both hunks against the newest disk content.
+    // A one-word swap renders merged, so the replacement shows as an inserted
+    // run inside the paragraph rather than as a separate added block.
     await expect(page.locator('.review-bar .review-count')).toHaveText('2 changes remaining')
-    await expect(
-      page.locator('.review-part.review-added', { hasText: 'Beta changed.' })
-    ).toBeVisible()
+    // The shared trailing "." stays an unchanged run, so the inserted mark is
+    // the bare word.
+    const betaMerged = page.locator('.review-part.review-merged', { hasText: 'Beta' })
+    await expect(betaMerged).toHaveCount(1)
+    await expect(betaMerged.locator('.review-word-add')).toHaveText('changed')
+    await expect(betaMerged.locator('del.review-word-del')).toHaveText('original')
 
     // Clean up: accept everything and confirm the reconciled write.
     await page.locator('.review-bar .accept-all').click()
