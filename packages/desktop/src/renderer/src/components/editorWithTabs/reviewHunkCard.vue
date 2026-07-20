@@ -236,7 +236,7 @@ const toggleView = (): void => {
 .sug-actions.view-row {
   margin-top: 6px;
   padding-top: 6px;
-  border-top: 1px dashed var(--reviewCardDivider, var(--editorColor20, rgba(128, 128, 128, 0.2)));
+  border-top: 1px dashed var(--reviewCardDivider, var(--editorColor10, rgba(128, 128, 128, 0.2)));
 }
 
 .act {

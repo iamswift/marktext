@@ -38,6 +38,25 @@
   --diffDeletedWordBg: rgba(229, 83, 75, 0.4);
   --diffDeletedStroke: rgba(229, 83, 75, 0.6);
   --diffActiveOutline: var(--themeColor);
+  /* Referenced by .review-merged, which deliberately carries no block tint —
+     it holds both sides at once and the word marks do the work. Defined so it
+     is an intentional value rather than a dangling var(). */
+  --diffMergedBg: transparent;
+  --diffAddedInk: rgba(120, 190, 125, 0.95);
+  --diffDeletedInk: rgba(229, 130, 125, 0.95);
+
+  /* Inline diff review — margin cards. Kept translucent so they composite over
+     the editor background rather than punching a light hole in it. */
+  --reviewCardBg: rgba(255, 255, 255, 0.04);
+  --reviewCardBorder: rgba(255, 255, 255, 0.14);
+  --reviewCardDivider: rgba(255, 255, 255, 0.12);
+  --reviewCardShadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  --reviewCardHoverShadow: 0 2px 8px rgba(0, 0, 0, 0.45);
+  --reviewCardHoverBorder: rgba(127, 166, 207, 0.8);
+  --reviewCardKindColor: rgba(255, 255, 255, 0.55);
+  --reviewCardRailPending: rgba(127, 166, 207, 0.7);
+  --reviewCardRailDecided: rgba(87, 171, 90, 0.7);
+  --reviewCardRailRestored: rgba(229, 83, 75, 0.6);
 
   --buttonFontColor: rgba(255, 255, 255, 0.6);
   --buttonBgColor: #424344;
