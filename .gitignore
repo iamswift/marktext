@@ -20,3 +20,6 @@ playwright-report/
 .claude/
 .agents/
 .agent/
+# Local agent-loop harness and internal planning docs — not project artifacts
+scripts/ralph/
+tasks/
