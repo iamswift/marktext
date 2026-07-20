@@ -1,18 +1,18 @@
 <template>
   <div class="review-bar">
-    <div class="review-bar-status">
+    <div class="banner">
       <span
         v-if="reviewStore.baselineWasUnsaved"
         class="review-unsaved-banner"
       >
         {{ t('review.unsavedBaselineBanner') }}
       </span>
-      <span class="review-count">
-        {{
-          reviewStore.remainingCount > 0
-            ? t('review.remainingCount', { count: reviewStore.remainingCount })
-            : t('review.allDecided')
-        }}
+      {{ t('review.banner') }}
+    </div>
+    <div class="review-bar-status">
+      <span class="review-count progress">
+        <span class="done">{{ reviewStore.decidedCount }}</span>
+        {{ t('review.progressOf', { total: reviewStore.hunks.length }) }}
       </span>
     </div>
     <div class="review-bar-actions">
@@ -53,14 +53,23 @@
         {{ t('review.exit') }}
       </button>
     </div>
+    <div class="track">
+      <i :style="{ width: `${progressPercent}%` }" />
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue'
 import { useReviewStore } from '@/store/review'
 import { t } from '../../i18n'
 
 const reviewStore = useReviewStore()
+
+const progressPercent = computed(() => {
+  const total = reviewStore.hunks.length
+  return total === 0 ? 0 : Math.round((reviewStore.decidedCount / total) * 100)
+})
 
 const acceptAll = (): void => {
   reviewStore.acceptAll().catch(console.error)
@@ -71,16 +80,40 @@ const rejectAll = (): void => {
 </script>
 
 <style scoped>
+/* Grid rather than a single flex row: the banner spans the full width above,
+   and the progress track spans it below, with status and actions sharing the
+   middle row. */
 .review-bar {
   flex: 0 0 auto;
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 6px 16px;
+  gap: 6px 12px;
+  padding: 8px 16px;
   background: var(--floatBgColor, var(--editorBgColor));
   border-bottom: 1px solid var(--editorColor30, rgba(128, 128, 128, 0.3));
   font-size: 13px;
+}
+
+.banner {
+  grid-column: 1 / -1;
+  color: var(--editorColor60, rgba(128, 128, 128, 0.75));
+  min-width: 0;
+}
+
+.track {
+  grid-column: 1 / -1;
+  height: 5px;
+  border-radius: 3px;
+  background: var(--editorColor10, rgba(128, 128, 128, 0.15));
+  overflow: hidden;
+}
+
+.track > i {
+  display: block;
+  height: 100%;
+  background: var(--themeColor);
+  transition: width 0.25s ease;
 }
 
 .review-bar-status {
@@ -89,6 +122,15 @@ const rejectAll = (): void => {
   gap: 12px;
   min-width: 0;
   overflow: hidden;
+}
+
+.progress {
+  font-weight: 600;
+  opacity: 1;
+}
+
+.progress .done {
+  color: var(--themeColor);
 }
 
 .review-unsaved-banner {

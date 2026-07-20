@@ -257,7 +257,9 @@ test.describe('inline diff review mode: keyboard and review bar', () => {
     await expect(page.locator('.review-overlay')).toBeVisible({ timeout: 5000 })
 
     // The review bar reports all five and the first hunk starts focused.
-    await expect(page.locator('.review-bar .review-count')).toHaveText('5 changes remaining')
+    await expect(page.locator('.review-bar .review-count')).toHaveText(
+      '0 of 5 changes reviewed'
+    )
     await expect(page.locator('.review-region.active')).toContainText('Alpha')
     // FR-3's banner is about genuine unsaved edits, not "an external change
     // arrived" — this tab was untouched and saved, so it must not show.
@@ -275,7 +277,9 @@ test.describe('inline diff review mode: keyboard and review bar', () => {
     await expect
       .poll(() => fs.readFileSync(filePath, 'utf-8'), { timeout: 10000 })
       .toContain('Alpha changed.')
-    await expect(page.locator('.review-bar .review-count')).toHaveText('4 changes remaining')
+    await expect(page.locator('.review-bar .review-count')).toHaveText(
+      '1 of 5 changes reviewed'
+    )
     await expect(page.locator('.review-region.active')).toContainText('Beta')
 
     // 'r' rejects the focused (Beta) hunk — the external tool's proposal is
@@ -285,7 +289,9 @@ test.describe('inline diff review mode: keyboard and review bar', () => {
       .poll(() => fs.readFileSync(filePath, 'utf-8'), { timeout: 10000 })
       .toContain('Beta original.')
     expect(fs.readFileSync(filePath, 'utf-8')).not.toContain('Beta changed.')
-    await expect(page.locator('.review-bar .review-count')).toHaveText('3 changes remaining')
+    await expect(page.locator('.review-bar .review-count')).toHaveText(
+      '2 of 5 changes reviewed'
+    )
     await expect(page.locator('.review-region.active')).toContainText('Gamma')
 
     // 'e' opens the focused (Gamma) hunk's editor; Ctrl+Enter confirms from
@@ -301,7 +307,9 @@ test.describe('inline diff review mode: keyboard and review bar', () => {
       .poll(() => fs.readFileSync(filePath, 'utf-8'), { timeout: 10000 })
       .toContain('Gamma EDITED.')
     await expect(page.locator('.review-hunk-editor')).toHaveCount(0)
-    await expect(page.locator('.review-bar .review-count')).toHaveText('2 changes remaining')
+    await expect(page.locator('.review-bar .review-count')).toHaveText(
+      '3 of 5 changes reviewed'
+    )
 
     // Escape asks how to leave with hunks still undecided; accepting the
     // remainder in one shot resolves Delta and Epsilon together and exits.
@@ -385,7 +393,9 @@ test.describe('inline diff review mode: source-mode guard and mid-review concurr
     // The overlay now reflects both hunks against the newest disk content.
     // A one-word swap renders merged, so the replacement shows as an inserted
     // run inside the paragraph rather than as a separate added block.
-    await expect(page.locator('.review-bar .review-count')).toHaveText('2 changes remaining')
+    await expect(page.locator('.review-bar .review-count')).toHaveText(
+      '0 of 2 changes reviewed'
+    )
     // The shared trailing "." stays an unchanged run, so the inserted mark is
     // the bare word.
     const betaMerged = page.locator('.review-part.review-merged', { hasText: 'Beta' })

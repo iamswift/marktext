@@ -983,6 +983,8 @@
     "exit": "Exit review",
     "remainingCount": "{count} changes remaining",
     "allDecided": "All changes decided",
+    "banner": "This file was changed by another app. Keep or undo each change below.",
+    "progressOf": "of {total} changes reviewed",
     "unsavedBaselineBanner": "This review started from unsaved edits — accepted changes are layered on top of them.",
     "exitPromptMessage": "{count} changes are still undecided. What do you want to do before leaving review?",
     "acceptRemaining": "Accept remaining",

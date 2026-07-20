@@ -96,6 +96,9 @@ export const useReviewStore = defineStore('review', {
     remainingCount(): number {
       return this.undecidedHunks.length
     },
+    decidedCount(): number {
+      return this.hunks.length - this.undecidedHunks.length
+    },
     /**
      * How a hunk should render, in precedence order: a hand override, then a
      * non-auto layout preference, then the classifier. Presentation only — it
