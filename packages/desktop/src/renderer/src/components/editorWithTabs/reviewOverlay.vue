@@ -6,44 +6,47 @@
     @keydown="onKeydown"
   >
     <div class="review-document">
-      <template v-for="(segment, index) in renderedSegments">
-        <div
-          v-if="segment.kind === 'unchanged'"
-          :key="`u-${index}`"
-          class="review-segment"
-          v-html="segment.html"
-        />
-        <div
-          v-else
-          :key="`r-${index}`"
-          class="review-region"
-          :class="{ active: isActiveRegion(segment) }"
-          :data-hunk-ids="segment.hunkIds.join(' ')"
-        >
-          <template
-            v-for="(part, partIndex) in segment.parts"
-            :key="partIndex"
+      <template
+        v-for="(segment, index) in renderedSegments"
+        :key="`s-${index}`"
+      >
+        <div class="doc-cell">
+          <div
+            v-if="segment.kind === 'unchanged'"
+            class="review-segment"
+            v-html="segment.html"
+          />
+          <div
+            v-else
+            class="review-region"
+            :class="{ active: isActiveRegion(segment) }"
+            :data-hunk-ids="segment.hunkIds.join(' ')"
           >
-            <review-hunk-editor
-              v-if="part.hunkId && isEditingHunkPart(segment, part, partIndex)"
-              :hunk-id="part.hunkId"
-            />
-            <div
-              v-else-if="!isEditingHunkOtherPart(part)"
-              class="review-part"
-              :class="`review-${part.role}`"
-              :data-hunk-id="part.hunkId"
+            <template
+              v-for="(part, partIndex) in segment.parts"
+              :key="partIndex"
             >
-              <review-hunk-controls
-                v-if="part.hunkId && isFirstPartOfHunk(segment, partIndex)"
+              <review-hunk-editor
+                v-if="part.hunkId && isEditingHunkPart(segment, part, partIndex)"
                 :hunk-id="part.hunkId"
               />
               <div
-                class="review-part-content"
-                v-html="part.html"
-              />
-            </div>
-          </template>
+                v-else-if="!isEditingHunkOtherPart(part)"
+                class="review-part"
+                :class="`review-${part.role}`"
+                :data-hunk-id="part.hunkId"
+              >
+                <review-hunk-controls
+                  v-if="part.hunkId && isFirstPartOfHunk(segment, partIndex)"
+                  :hunk-id="part.hunkId"
+                />
+                <div
+                  class="review-part-content"
+                  v-html="part.html"
+                />
+              </div>
+            </template>
+          </div>
         </div>
       </template>
     </div>
@@ -281,9 +284,10 @@ const onKeydown = (event: KeyboardEvent): void => {
   margin: 0;
 }
 
-.review-segment + .review-region,
-.review-region + .review-segment,
-.review-segment + .review-segment {
+/* Segments and regions are each wrapped in a .doc-cell, so they are no longer
+   siblings — spacing lives on the cell. Top-only: once this becomes a grid the
+   cells are grid items, whose margins do not collapse. */
+.doc-cell:not(:first-child) {
   margin-top: 8px;
 }
 
