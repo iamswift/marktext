@@ -22,6 +22,7 @@
       {{ t('review.edit') }}
     </button>
     <button
+      v-if="canToggleView"
       class="control toggle-view"
       :title="t('review.toggleViewHint')"
       @click.stop="toggleView"
@@ -36,7 +37,16 @@ import { computed } from 'vue'
 import { useReviewStore } from '@/store/review'
 import { t } from '../../i18n'
 
-const props = defineProps<{ hunkId: string }>()
+const props = defineProps<{
+  hunkId: string
+  /**
+   * Narrow mode never groups parts into a Before/After card, so a one-sided
+   * hunk (or a non-mergeable replace) has no second rendering to switch to —
+   * unlike the card's looser rule, only a hunk whose merged view is actually
+   * renderable gets the toggle here.
+   */
+  canToggleView: boolean
+}>()
 
 const reviewStore = useReviewStore()
 

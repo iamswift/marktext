@@ -72,7 +72,9 @@ export function computeHunkMetrics(hunk: DiffHunk): HunkMetrics {
  */
 export function classifyHunk(hunk: DiffHunk): ReviewViewKind {
   if (hunk.type !== 'replace') {
-    // add/delete hunks render as one tinted block; there is no pair to stack.
+    // 'inline' is the default single-block rendering for add/delete hunks;
+    // the per-hunk toggle can still switch one to a Before/After card with
+    // one side left empty.
     return 'inline'
   }
   const metrics = computeHunkMetrics(hunk)

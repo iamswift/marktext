@@ -89,7 +89,8 @@
               >
                 <review-hunk-controls
                   v-if="!wide && node.part.hunkId && node.firstOfHunk"
-                  :hunk-id="node.part.hunkId"
+                  :hunk-id="node.part.hunkId!"
+                  :can-toggle-view="renderedSegments.inlineCapable.has(node.part.hunkId!)"
                 />
                 <div
                   class="review-part-content"
@@ -108,6 +109,7 @@
             :key="cardHunkId"
             :hunk-id="cardHunkId"
             :ordinal="row.cardHunkIds.length > 1 ? cardIndex + 1 : undefined"
+            :can-toggle-view="canToggleView(cardHunkId)"
           />
         </div>
       </template>
@@ -193,12 +195,24 @@ const fenceWrapped = (part: { markdown: string; fence?: string }): string => {
   return `${part.fence}\n${part.markdown}\n${delimiter}`
 }
 
-const renderedSegments = computed<RenderedSegment[]>(() => {
+/**
+ * Segments plus which hunks are capable of the merged ('inline') rendering.
+ * Capability is independent of the current view preference — a hunk sitting
+ * in 'stacked' must stay distinguishable from one that can never merge, so
+ * the card knows whether to offer the toggle at all.
+ */
+interface RenderedSegments {
+  segments: RenderedSegment[]
+  inlineCapable: Set<string>
+}
+
+const renderedSegments = computed<RenderedSegments>(() => {
   const segments = computeRegions(
     annotateMerged(reviewStore.baselineText, reviewStore.hunks, reviewStore.decisions)
   )
+  const inlineCapable = new Set<string>()
 
-  return segments.map((segment): RenderedSegment => {
+  const renderedSegmentList = segments.map((segment): RenderedSegment => {
     if (segment.kind === 'unchanged') {
       return { kind: 'unchanged', html: renderFragment(segment.markdown) }
     }
@@ -228,10 +242,11 @@ const renderedSegments = computed<RenderedSegment[]>(() => {
 
         // The merged view can only be drawn when both sides are one flowing
         // paragraph; lists, code and multi-block fragments always stack.
-        const wantInline =
-          reviewStore.viewFor(hunkId) === 'inline' &&
-          isSingleParagraph(deletedEl) &&
-          isSingleParagraph(addedEl)
+        const mergeable = isSingleParagraph(deletedEl) && isSingleParagraph(addedEl)
+        if (mergeable) {
+          inlineCapable.add(hunkId)
+        }
+        const wantInline = reviewStore.viewFor(hunkId) === 'inline' && mergeable
 
         if (wantInline) {
           applyInlineMerge(deletedEl.textContent ?? '', addedEl)
@@ -251,6 +266,8 @@ const renderedSegments = computed<RenderedSegment[]>(() => {
 
     return { kind: 'region', hunkIds: segment.hunkIds, parts }
   })
+
+  return { segments: renderedSegmentList, inlineCapable }
 })
 
 /**
@@ -313,7 +330,15 @@ const buildNodes = (parts: RenderedPart[], grouped: boolean): RenderNode[] => {
       // A fence delimiter can interleave a foreign part into the run; the
       // grouping is presentation only, so fall back to flat parts rather than
       // risk reordering content.
-      if (run.every((candidate) => candidate.role === 'deleted' || candidate.role === 'added')) {
+      const stackable = run.every(
+        (candidate) => candidate.role === 'deleted' || candidate.role === 'added'
+      )
+      // A pure add or delete has no pair to compare, so its inline view is the
+      // single tinted block; the Before/After card, with its empty half, is
+      // opt-in via the toggle. A two-sided replace with no merged part always
+      // stacks — it either chose 'stacked' or could not merge, same rendering.
+      const oneSided = stackable && run.every((candidate) => candidate.role === run[0].role)
+      if (stackable && !(oneSided && reviewStore.viewFor(hunkId) === 'inline')) {
         nodes.push({
           kind: 'stack',
           hunkId,
@@ -332,7 +357,7 @@ const buildNodes = (parts: RenderedPart[], grouped: boolean): RenderNode[] => {
 }
 
 const renderedRows = computed<RenderRow[]>(() =>
-  renderedSegments.value.map((segment, index) => {
+  renderedSegments.value.segments.map((segment, index) => {
     const hunkIds = segment.kind === 'region' ? segment.hunkIds : []
     return {
       key: `${segment.kind}:${hunkIds.join(',')}:${index}`,
@@ -351,6 +376,15 @@ const isActiveRegion = (segment: { hunkIds: string[] }): boolean =>
 // as the same thing.
 const isSpotlit = (hunkId?: string): boolean =>
   hunkId !== undefined && reviewStore.spotlightHunkId === hunkId
+
+// A one-sided hunk always has both renderings available: the single tinted
+// block, or a Before/After card with one empty half.
+const canToggleView = (hunkId: string): boolean => {
+  const hunk = reviewStore.hunks.find((candidate) => candidate.id === hunkId)
+  return hunk !== undefined && hunk.type !== 'replace'
+    ? true
+    : renderedSegments.value.inlineCapable.has(hunkId)
+}
 
 let resizeObserver: ResizeObserver | null = null
 let resizeFrame = 0

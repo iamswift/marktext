@@ -68,10 +68,13 @@
         </button>
       </div>
 
-      <div class="sug-actions view-row">
+      <div
+        v-if="canToggleView"
+        class="sug-actions view-row"
+      >
         <button
           class="act ghost toggle-view"
-          :title="t('review.toggleViewHint')"
+          :title="oneSided ? t('review.toggleViewHintOneSided') : t('review.toggleViewHint')"
           @click.stop="toggleView"
         >
           {{ toggleLabel }}
@@ -91,6 +94,12 @@ const props = defineProps<{
   hunkId: string
   /** Set only when this cell holds several cards, to pair each with its text. */
   ordinal?: number
+  /**
+   * Whether a merged rendering exists for this hunk. Mergeability depends on
+   * both sides being a single paragraph, which is only knowable after the
+   * overlay has rendered them — the card itself has no access to that DOM.
+   */
+  canToggleView: boolean
 }>()
 
 const reviewStore = useReviewStore()
@@ -99,6 +108,10 @@ const hunk = computed(() => reviewStore.hunks.find((candidate) => candidate.id =
 const editing = computed(() => reviewStore.editingHunkId === props.hunkId)
 const spotted = computed(() => reviewStore.spotlightHunkId === props.hunkId)
 const delta = computed(() => (hunk.value ? summarizeHunk(hunk.value) : null))
+
+// A one-sided hunk's merged view is a single struck-through/added block, not
+// a paragraph carrying both sides — "In paragraph" would misdescribe it.
+const oneSided = computed(() => hunk.value !== undefined && hunk.value.type !== 'replace')
 
 // Singular and plural are separate keys: vue-i18n plural parsing is disabled
 // in this app's config, so the "a | b" form would not compile.
@@ -142,7 +155,9 @@ const bulkText = (lines: number): string =>
 const toggleLabel = computed(() =>
   reviewStore.viewFor(props.hunkId) === 'inline'
     ? t('review.viewStacked')
-    : t('review.viewInline')
+    : oneSided.value
+      ? t('review.viewInPlace')
+      : t('review.viewInline')
 )
 
 // Clicking the card body toggles; tabbing into it only ever sets, so moving
