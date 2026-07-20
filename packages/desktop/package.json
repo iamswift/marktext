@@ -55,9 +55,9 @@
   "dependencies": {
     "@electron-toolkit/preload": "^3.0.2",
     "@electron-toolkit/utils": "^4.0.0",
-    "@intlify/core-base": "^11.4.6",
     "@element-plus/icons-vue": "^2.3.2",
     "@hfelix/electron-localshortcut": "^4.0.1",
+    "@intlify/core-base": "^11.4.6",
     "@marktext/file-icons": "^1.0.6",
     "@marktext/muyajs": "workspace:*",
     "@muyajs/core": "workspace:*",
@@ -70,6 +70,7 @@
     "codemirror": "^5.65.21",
     "command-exists": "^1.2.9",
     "deep-equal": "^2.2.3",
+    "diff": "^9.0.0",
     "dom-autoscroller": "^2.3.4",
     "dompurify": "^3.4.11",
     "dragula": "^3.7.3",

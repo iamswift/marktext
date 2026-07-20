@@ -2,6 +2,7 @@ import { readlinkSync, ensureDir } from 'fs-extra'
 import path from 'path'
 import writeFileAtomic from 'write-file-atomic'
 import { isDirectory, isFile, isSymbolicLink } from 'common/filesystem'
+import { withFsRetry } from 'common/filesystem/retry'
 
 /**
  * Normalize the path into an absolute path and resolves the link target if needed.
@@ -45,5 +46,7 @@ export const writeFile = async(
   // write-file-atomic also preserves the target's mode/owner, writes through a
   // symlink to its target, and uses a unique temp name — all of which a plain
   // temp+rename dropped.
-  await writeFileAtomic(pathname, content, options)
+  // The rename can transiently fail on Windows while an antivirus scanner or
+  // the search indexer holds the target, hence the retry.
+  await withFsRetry(() => writeFileAtomic(pathname, content, options))
 }

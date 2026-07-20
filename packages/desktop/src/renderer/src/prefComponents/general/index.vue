@@ -22,6 +22,18 @@
           :step="100"
           :on-change="(value) => onSelectChange('autoSaveDelay', value)"
         />
+        <cur-select
+          :description="t('preferences.general.fileChangeAction.title')"
+          :value="fileChangeAction"
+          :options="getFileChangeActionOptions()"
+          :on-change="(value) => onSelectChange('fileChangeAction', value)"
+        />
+        <cur-select
+          :description="t('preferences.general.reviewDiffLayout.title')"
+          :value="reviewDiffLayout"
+          :options="getReviewDiffLayoutOptions()"
+          :on-change="(value) => onSelectChange('reviewDiffLayout', value)"
+        />
       </template>
     </compound>
 
@@ -196,6 +208,8 @@ import textBox from '../common/textBox/index.vue'
 import { isOsx } from '@/util'
 
 import {
+  getFileChangeActionOptions,
+  getReviewDiffLayoutOptions,
   getTitleBarStyleOptions,
   zoomOptions,
   getFileSortByOptions,
@@ -209,6 +223,8 @@ const preferenceStore = usePreferencesStore()
 const {
   autoSave,
   autoSaveDelay,
+  fileChangeAction,
+  reviewDiffLayout,
   titleBarStyle,
   defaultDirectoryToOpen,
   openFilesInNewWindow,

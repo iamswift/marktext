@@ -7,6 +7,7 @@ import {
   shell,
   ipcMain,
   type IpcMainEvent,
+  type IpcMainInvokeEvent,
   type MenuItem
 } from 'electron'
 import log from 'electron-log'
@@ -22,7 +23,7 @@ import { writeMarkdownFile } from '../../filesystem/markdown'
 import { getPath, getRecommendTitleFromMarkdownString } from '../../utils'
 import pandoc from '../../utils/pandoc'
 import { t } from '../../i18n'
-import type { UnsavedFile } from '@shared/types/files'
+import type { SaveOptions, UnsavedFile } from '@shared/types/files'
 
 type Win = BrowserWindow | null | undefined
 
@@ -222,6 +223,33 @@ const handleResponseForSave = async(
       const msg = err instanceof Error ? err.message : String(err)
       win.webContents.send('mt::tab-save-failure', id, msg)
     })
+}
+
+/**
+ * Review-mode write-back. Deliberately narrower than handleResponseForSave:
+ * the file always exists (review only starts from an on-disk change), the tab
+ * must NOT be marked saved (the editor still shows the baseline mid-review),
+ * and errors propagate to the invoking renderer instead of a tab event. The
+ * window-file-saved emit routes through the same watcher self-write
+ * suppression as a regular save (FR-12).
+ */
+const handleReviewWriteFile = async(
+  e: IpcMainInvokeEvent,
+  pathname: string,
+  markdown: string,
+  options: SaveOptions
+): Promise<void> => {
+  const win = BrowserWindow.fromWebContents(e.sender)
+  if (!win) {
+    throw new Error('Cannot resolve the window for the review write.')
+  }
+  if (!pathname) {
+    throw new Error('Cannot write a review decision without a file path.')
+  }
+
+  const filePath = path.resolve(pathname)
+  await writeMarkdownFile(filePath, markdown, options as Parameters<typeof writeMarkdownFile>[2])
+  ipcMain.emit('window-file-saved', win.id, filePath)
 }
 
 const showUnsavedFilesMessage = async(
@@ -456,6 +484,11 @@ ipcMain.on('mt::close-window-confirm', async(e, unsavedFiles: UnsavedFile[]) => 
 })
 
 ipcMain.on('mt::response-file-save', handleResponseForSave as Parameters<typeof ipcMain.on>[1])
+
+ipcMain.handle(
+  'mt::review-write-file',
+  handleReviewWriteFile as Parameters<typeof ipcMain.handle>[1]
+)
 
 ipcMain.on('mt::response-export', handleResponseForExport as Parameters<typeof ipcMain.on>[1])
 

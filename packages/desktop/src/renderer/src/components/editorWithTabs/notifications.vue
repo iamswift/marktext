@@ -11,6 +11,14 @@
     <div class="controls">
       <div>
         <span
+          v-for="button in currentNotification.buttons"
+          :key="button.value"
+          class="inline-button labeled"
+          @click.stop="handleClick(button.value)"
+        >
+          {{ button.label }}
+        </span>
+        <span
           v-if="currentNotification.showConfirm"
           class="inline-button"
           @click.stop="handleClick(true)"
@@ -55,7 +63,7 @@ const currentNotification = computed(() => {
   return notifications[0]
 })
 
-const handleClick = (status: boolean) => {
+const handleClick = (status: boolean | string) => {
   const notifications = currentFile.value?.notifications
   if (!notifications || notifications.length === 0) {
     console.error(t('editor.notifications.notificationNotFound'))
@@ -119,6 +127,11 @@ const handleClick = (status: boolean) => {
   & .inline-button:hover {
     background: rgba(255, 255, 255, 0.1);
     border: 1px solid rgba(255, 255, 255, 0.6);
+  }
+  & .inline-button.labeled {
+    width: auto;
+    padding: 0 8px;
+    white-space: nowrap;
   }
 }
 </style>

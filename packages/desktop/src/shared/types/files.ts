@@ -94,11 +94,19 @@ export interface IFileState {
  * Per-tab notification banner. Pushed via the editor store's
  * `pushTabNotification` action; consumed by `notifications.vue`.
  */
+export interface FileNotificationButton {
+  label: string
+  /** Passed to the notification's action when the button is clicked. */
+  value: string
+}
+
 export interface FileNotification {
   msg: string
   showConfirm: boolean
   style: string
   exclusiveType: string
+  /** Labeled choices beyond the default OK/dismiss pair. */
+  buttons?: FileNotificationButton[]
   action: (status?: unknown) => void
 }
 
