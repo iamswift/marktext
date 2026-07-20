@@ -50,14 +50,14 @@
           :title="t('review.acceptHint')"
           @click.stop="accept"
         >
-          ✓ {{ t('review.keep') }}
+          ✓ {{ t('review.accept') }}
         </button>
         <button
           class="act undo reject"
           :title="t('review.rejectHint')"
           @click.stop="reject"
         >
-          ↺ {{ t('review.undo') }}
+          ↺ {{ t('review.reject') }}
         </button>
         <button
           class="act ghost edit"

@@ -315,7 +315,7 @@ test.describe('inline diff review mode: keyboard and review bar', () => {
     // remainder in one shot resolves Delta and Epsilon together and exits.
     await page.keyboard.press('Escape')
     const acceptRemaining = page.locator('.editor-notifications .inline-button.labeled', {
-      hasText: 'Accept remaining'
+      hasText: 'Keep remaining'
     })
     await expect(acceptRemaining).toBeVisible({ timeout: 5000 })
     await acceptRemaining.click()
