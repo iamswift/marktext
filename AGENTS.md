@@ -22,7 +22,7 @@ Root `package.json` scripts are thin proxies: `pnpm lint` / `pnpm typecheck` / `
 
 - `pnpm install` runs `scripts/postinstall.ts`, which downloads Electron, applies `patch-package` patches (in `packages/desktop/patches/`), runs `electron-rebuild`, and minifies locales. If native/Electron-version behavior seems off after a fresh clone, re-run `pnpm install` rather than debugging the symptom directly.
 - `renderer/` code compiles to ESM only — never add a `require()` there. `main/` and `preload/` are CommonJS.
-- The renderer is sandboxed (`contextIsolation: true`, `nodeIntegration: false`) *except* the editor and preferences windows, which run with `contextIsolation: false` + `nodeIntegration: true` (see `packages/desktop/src/main/config.js`) — don't assume every window has the same Node access.
+- Every window is sandboxed — `contextIsolation: true`, `sandbox: true`, `nodeIntegration: false` for both `editorWinOptions` and `preferencesWinOptions` (`packages/desktop/src/main/config.ts`). All Node access goes through the typed contextBridge surface in `packages/desktop/src/preload/index.ts`; never reach for `require`/`process`/`fs` in renderer code. Note both windows do set `webSecurity: false`, so same-origin protections are off — treat any content rendered from a file on disk as untrusted and keep it on the existing DOMPurify path (`renderToStaticHTML` sanitizes by default).
 - Editing `main/` source requires restarting `pnpm run dev`; only the renderer hot-reloads (`Ctrl+R` reloads renderer + re-runs preload, not main).
 - `pnpm run minify-locales` is required before production builds but intentionally skipped in `dev` — don't add it to dev workflows.
 - PRs target the `develop` branch, not `main`.
