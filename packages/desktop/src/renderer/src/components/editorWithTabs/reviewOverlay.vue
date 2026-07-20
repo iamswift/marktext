@@ -27,26 +27,72 @@
             :data-hunk-ids="row.segment.hunkIds.join(' ')"
           >
             <template
-              v-for="(part, partIndex) in row.segment.parts"
-              :key="partIndex"
+              v-for="(node, nodeIndex) in row.nodes"
+              :key="nodeIndex"
             >
               <review-hunk-editor
-                v-if="part.hunkId && isEditingHunkPart(row.segment, part, partIndex)"
-                :hunk-id="part.hunkId"
+                v-if="node.kind === 'editor'"
+                :hunk-id="node.hunkId"
               />
               <div
-                v-else-if="!isEditingHunkOtherPart(part)"
+                v-else-if="node.kind === 'stack'"
+                class="hunk-card"
+                :data-hunk-id="node.hunkId"
+              >
+                <div class="side before">
+                  <span class="cap">{{ t('review.capBefore') }}</span>
+                  <div
+                    v-for="(beforePart, beforeIndex) in node.before"
+                    :key="beforeIndex"
+                    class="review-part review-deleted"
+                    :data-hunk-id="node.hunkId"
+                  >
+                    <div
+                      class="review-part-content"
+                      v-html="beforePart.html"
+                    />
+                  </div>
+                  <p
+                    v-if="!node.before.length"
+                    class="empty"
+                  >
+                    {{ t('review.emptyBefore') }}
+                  </p>
+                </div>
+                <div class="side after">
+                  <span class="cap">{{ t('review.capAfter') }}</span>
+                  <div
+                    v-for="(afterPart, afterIndex) in node.after"
+                    :key="afterIndex"
+                    class="review-part review-added"
+                    :data-hunk-id="node.hunkId"
+                  >
+                    <div
+                      class="review-part-content"
+                      v-html="afterPart.html"
+                    />
+                  </div>
+                  <p
+                    v-if="!node.after.length"
+                    class="empty"
+                  >
+                    {{ t('review.emptyAfter') }}
+                  </p>
+                </div>
+              </div>
+              <div
+                v-else
                 class="review-part"
-                :class="`review-${part.role}`"
-                :data-hunk-id="part.hunkId"
+                :class="`review-${node.part.role}`"
+                :data-hunk-id="node.part.hunkId"
               >
                 <review-hunk-controls
-                  v-if="!wide && part.hunkId && isFirstPartOfHunk(row.segment, partIndex)"
-                  :hunk-id="part.hunkId"
+                  v-if="!wide && node.part.hunkId && node.firstOfHunk"
+                  :hunk-id="node.part.hunkId"
                 />
                 <div
                   class="review-part-content"
-                  v-html="part.html"
+                  v-html="node.part.html"
                 />
               </div>
             </template>
@@ -76,6 +122,7 @@ import { useReviewStore } from '@/store/review'
 import { applyWordMarks } from '@/util/reviewWordMarks'
 import { applyInlineMerge, isSingleParagraph } from '@/util/reviewInlineMerge'
 import { shouldGoWide } from '@/util/reviewLayout'
+import { t } from '../../i18n'
 import ReviewHunkControls from './reviewHunkControls.vue'
 import ReviewHunkCard from './reviewHunkCard.vue'
 import ReviewHunkEditor from './reviewHunkEditor.vue'
@@ -91,6 +138,15 @@ type RenderedSegment =
   | { kind: 'region'; hunkIds: string[]; parts: RenderedPart[] }
 
 /**
+ * What actually renders in a document cell. A stacked hunk's parts are grouped
+ * into one Before/After card; everything else stays a flat part.
+ */
+type RenderNode =
+  | { kind: 'part'; part: RenderedPart; firstOfHunk: boolean }
+  | { kind: 'editor'; hunkId: string }
+  | { kind: 'stack'; hunkId: string; before: RenderedPart[]; after: RenderedPart[] }
+
+/**
  * One row of the review layout: a document cell and the cards that belong
  * beside it. In the two-column layout both are emitted as flat grid siblings,
  * so a row is a pairing rather than a container.
@@ -98,12 +154,20 @@ type RenderedSegment =
 interface RenderRow {
   key: string
   segment: RenderedSegment
+  nodes: RenderNode[]
   /** Hunks needing a margin card here, in document order; empty for context. */
   cardHunkIds: string[]
 }
 
 const reviewStore = useReviewStore()
 const overlayRef = ref<HTMLElement | null>(null)
+
+/**
+ * Margin cards need a card column plus a readable measure beside it. Measured
+ * on the overlay's own content box rather than the window, because the sidebar
+ * and TOC panel take width the window size does not reflect.
+ */
+const wide = ref(false)
 
 // Static fragments per markdown chunk; decided-hunk melt-back and unchanged
 // segments re-render from this cache instead of re-parsing.
@@ -197,12 +261,82 @@ const renderedSegments = computed<RenderedSegment[]>(() => {
  * whole document and lose scroll position. Keying on content holds a region's
  * identity steady across a melt. The index still tiebreaks repeated context.
  */
+/**
+ * Groups a stacked hunk's parts into one Before/After card.
+ *
+ * "Stacked" is read off what the pass above actually produced — a hunk is
+ * stacked iff it has no merged part — rather than from viewFor, because that
+ * pass falls back to stacking whenever a fragment is not a single paragraph
+ * even though the preference says inline.
+ *
+ * Grouping is wide-only: in narrow mode the floating controls anchor to
+ * .review-part, so the document keeps exactly today's flat presentation.
+ */
+const buildNodes = (parts: RenderedPart[], grouped: boolean): RenderNode[] => {
+  const firstIndexOfHunk = new Map<string, number>()
+  const hasMergedPart = new Set<string>()
+  parts.forEach((part, index) => {
+    if (!part.hunkId) {
+      return
+    }
+    if (!firstIndexOfHunk.has(part.hunkId)) {
+      firstIndexOfHunk.set(part.hunkId, index)
+    }
+    if (part.role === 'merged') {
+      hasMergedPart.add(part.hunkId)
+    }
+  })
+
+  const nodes: RenderNode[] = []
+  let index = 0
+  while (index < parts.length) {
+    const part = parts[index]
+    const hunkId = part.hunkId
+    const isFirst = hunkId !== undefined && firstIndexOfHunk.get(hunkId) === index
+
+    if (hunkId !== undefined && reviewStore.editingHunkId === hunkId) {
+      // The editor replaces every part of the hunk it is editing.
+      if (isFirst) {
+        nodes.push({ kind: 'editor', hunkId })
+      }
+      index++
+      continue
+    }
+
+    if (grouped && hunkId !== undefined && isFirst && !hasMergedPart.has(hunkId)) {
+      let end = index
+      while (end < parts.length && parts[end].hunkId === hunkId) {
+        end++
+      }
+      const run = parts.slice(index, end)
+      // A fence delimiter can interleave a foreign part into the run; the
+      // grouping is presentation only, so fall back to flat parts rather than
+      // risk reordering content.
+      if (run.every((candidate) => candidate.role === 'deleted' || candidate.role === 'added')) {
+        nodes.push({
+          kind: 'stack',
+          hunkId,
+          before: run.filter((candidate) => candidate.role === 'deleted'),
+          after: run.filter((candidate) => candidate.role === 'added')
+        })
+        index = end
+        continue
+      }
+    }
+
+    nodes.push({ kind: 'part', part, firstOfHunk: isFirst })
+    index++
+  }
+  return nodes
+}
+
 const renderedRows = computed<RenderRow[]>(() =>
   renderedSegments.value.map((segment, index) => {
     const hunkIds = segment.kind === 'region' ? segment.hunkIds : []
     return {
       key: `${segment.kind}:${hunkIds.join(',')}:${index}`,
       segment,
+      nodes: segment.kind === 'region' ? buildNodes(segment.parts, wide.value) : [],
       cardHunkIds: hunkIds
     }
   })
@@ -211,38 +345,6 @@ const renderedRows = computed<RenderRow[]>(() =>
 const isActiveRegion = (segment: { hunkIds: string[] }): boolean =>
   reviewStore.activeHunkId !== null && segment.hunkIds.includes(reviewStore.activeHunkId)
 
-const isFirstPartOfHunk = (
-  segment: { parts: RenderedPart[] },
-  partIndex: number
-): boolean => {
-  const { hunkId } = segment.parts[partIndex]
-  if (!hunkId) {
-    return false
-  }
-  return segment.parts.findIndex((p) => p.hunkId === hunkId) === partIndex
-}
-
-// While a hunk is being edited, its normal deleted/added parts are replaced
-// by a single reviewHunkEditor — rendered once, on the hunk's first part;
-// every other part belonging to that hunk renders nothing.
-const isEditingHunkPart = (
-  segment: { parts: RenderedPart[] },
-  part: RenderedPart,
-  partIndex: number
-): boolean =>
-  part.hunkId !== undefined &&
-  reviewStore.editingHunkId === part.hunkId &&
-  isFirstPartOfHunk(segment, partIndex)
-
-const isEditingHunkOtherPart = (part: RenderedPart): boolean =>
-  part.hunkId !== undefined && reviewStore.editingHunkId === part.hunkId
-
-/**
- * Margin cards need a card column plus a readable measure beside it. Measured
- * on the overlay's own content box rather than the window, because the sidebar
- * and TOC panel take width the window size does not reflect.
- */
-const wide = ref(false)
 let resizeObserver: ResizeObserver | null = null
 let resizeFrame = 0
 
@@ -417,6 +519,59 @@ const onKeydown = (event: KeyboardEvent): void => {
 .review-overlay.narrow .review-region.active :deep(.review-hunk-controls) {
   opacity: 1;
   pointer-events: auto;
+}
+
+/* Before/After comparison card for a stacked hunk. Holds no buttons — every
+   action for this hunk lives on its margin card. */
+.hunk-card {
+  border: 1px solid var(--reviewCardBorder, var(--editorColor30, rgba(128, 128, 128, 0.3)));
+  border-radius: 10px;
+  overflow: hidden;
+  margin: 2px 0;
+}
+
+.hunk-card .side {
+  padding: 8px 12px 10px;
+}
+
+.hunk-card .side.before {
+  background: var(--diffDeletedBg, rgba(220, 80, 80, 0.14));
+}
+
+.hunk-card .side.after {
+  background: var(--diffAddedBg, rgba(70, 180, 100, 0.14));
+}
+
+.hunk-card .cap {
+  display: block;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  margin-bottom: 3px;
+}
+
+.hunk-card .side.before .cap {
+  color: var(--diffDeletedInk, rgba(173, 107, 115, 1));
+}
+
+.hunk-card .side.after .cap {
+  color: var(--diffAddedInk, rgba(91, 147, 103, 1));
+}
+
+.hunk-card .empty {
+  color: var(--editorColor60, rgba(128, 128, 128, 0.75));
+  font-style: italic;
+  font-size: 14px;
+}
+
+/* The side's own tint and caption carry the meaning inside a comparison card,
+   so the part sheds its block treatment; word-level marks still apply. */
+.hunk-card .review-part {
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  text-decoration: none;
 }
 
 .review-deleted {
