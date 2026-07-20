@@ -17,6 +17,14 @@
     </div>
     <div class="review-bar-actions">
       <button
+        v-if="reviewStore.lastDecidedHunkId"
+        class="control undo-last"
+        :title="t('review.undoLastHint')"
+        @click="undoLast"
+      >
+        {{ t('review.undoLast') }}
+      </button>
+      <button
         class="control nav"
         :disabled="reviewStore.remainingCount === 0"
         :title="t('review.prev')"
@@ -76,6 +84,12 @@ const acceptAll = (): void => {
 }
 const rejectAll = (): void => {
   reviewStore.rejectAll().catch(console.error)
+}
+const undoLast = (): void => {
+  const hunkId = reviewStore.lastDecidedHunkId
+  if (hunkId) {
+    reviewStore.undecide(hunkId).catch(console.error)
+  }
 }
 </script>
 

@@ -61,6 +61,11 @@ interface ReviewState {
   spotlightHunkId: string | null
   /** Consumed by the overlay's focus watcher; see setSpotlight. */
   suppressNextFocusScroll: boolean
+  /**
+   * The single change "Undo last change" would restore. Null after a bulk
+   * decision, since there is no one change left to single out.
+   */
+  lastDecidedHunkId: string | null
   activeHunkId: string | null
   editingHunkId: string | null
   diskMeta: ReviewChangeData | null
@@ -80,6 +85,7 @@ const initialState = (): ReviewState => ({
   viewOverrides: new Map(),
   spotlightHunkId: null,
   suppressNextFocusScroll: false,
+  lastDecidedHunkId: null,
   activeHunkId: null,
   editingHunkId: null,
   diskMeta: null,
@@ -155,6 +161,7 @@ export const useReviewStore = defineStore('review', {
         viewOverrides: new Map(),
         spotlightHunkId: null,
         suppressNextFocusScroll: false,
+        lastDecidedHunkId: null,
         activeHunkId: hunks[0].id,
         editingHunkId: null,
         diskMeta: change.data,
@@ -182,6 +189,29 @@ export const useReviewStore = defineStore('review', {
         this.suppressNextFocusScroll = true
         this.activeHunkId = hunkId
       }
+    },
+
+    /**
+     * Puts a decided hunk back up for review and rewrites the file without it
+     * applied. The hunk simply reappears as a region on the next render, so
+     * this needs no change to the diff region model.
+     *
+     * Only reachable mid-review: the last decision finalizes and exits, which
+     * is why this is "undo the last change" rather than a per-card control on
+     * a settled card.
+     */
+    async undecide(hunkId: string): Promise<void> {
+      if (!this.active || !this.decisions.has(hunkId)) {
+        return
+      }
+      this.decisions.delete(hunkId)
+      if (this.lastDecidedHunkId === hunkId) {
+        this.lastDecidedHunkId = null
+      }
+      // Put the cursor on what just came back so a/r/e act on it.
+      this.activeHunkId = hunkId
+      this.suppressNextFocusScroll = false
+      await this._writeResolved()
     },
 
     /** Flips one hunk between the merged and before/after renderings. */
@@ -212,6 +242,7 @@ export const useReviewStore = defineStore('review', {
         // The hunk melts into context on the next render — nothing left to lit.
         this.spotlightHunkId = null
       }
+      this.lastDecidedHunkId = hunkId
       if (this.activeHunkId === hunkId) {
         this.activeHunkId = this.undecidedHunks[0]?.id ?? null
       }
@@ -402,6 +433,7 @@ export const useReviewStore = defineStore('review', {
         viewOverrides: new Map(),
         spotlightHunkId: null,
         suppressNextFocusScroll: false,
+        lastDecidedHunkId: null,
         activeHunkId: newHunks.find((hunk) => !carried.has(hunk.id))?.id ?? null,
         editingHunkId: null,
         diskMeta: change.data,
@@ -441,6 +473,9 @@ export const useReviewStore = defineStore('review', {
       }
       this.editingHunkId = null
       this.activeHunkId = null
+      this.spotlightHunkId = null
+      // A bulk decision leaves no single change to single out.
+      this.lastDecidedHunkId = null
       await this._writeResolved()
       this._maybeFinalize()
     },
