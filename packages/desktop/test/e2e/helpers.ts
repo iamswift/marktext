@@ -365,3 +365,32 @@ export const sendIpcToRenderer = async(
     { channel, args }
   )
 }
+
+/**
+ * Resizes the app window. Playwright's page.setViewportSize is a no-op against
+ * an Electron BrowserWindow, so the resize has to go through the main process.
+ */
+export const resizeWindow = async(
+  app: ElectronApplication,
+  width: number,
+  height: number
+): Promise<void> => {
+  await app.evaluate(({ BrowserWindow }, size) => {
+    BrowserWindow.getAllWindows()[0].setSize(size.width, size.height)
+  }, { width, height })
+}
+
+/**
+ * Clicks an action on the margin card belonging to the hunk whose document
+ * text matches `hunkText`. Cards are keyed by hunk id while the specs locate
+ * changes by their prose, so this bridges the two.
+ */
+export const clickCardAction = async(
+  page: Page,
+  hunkText: string,
+  action: 'accept' | 'reject' | 'edit' | 'toggle-view'
+): Promise<void> => {
+  const part = page.locator('.doc-cell [data-hunk-id]', { hasText: hunkText }).first()
+  const hunkId = await part.getAttribute('data-hunk-id')
+  await page.locator(`.sug-card[data-hunk="${hunkId}"] .${action}`).click()
+}

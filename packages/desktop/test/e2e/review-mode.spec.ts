@@ -1,7 +1,7 @@
 import * as fs from 'node:fs'
 import { expect, test } from '@playwright/test'
 import type { ElectronApplication, Page } from 'playwright'
-import { launchWithMarkdown, clickMenuById } from './helpers'
+import { launchWithMarkdown, clickMenuById, clickCardAction } from './helpers'
 
 const FIXTURE = [
   '# Review fixture',
@@ -118,8 +118,8 @@ test.describe('inline diff review mode', () => {
     const paragraphPart = page.locator('.review-part.review-deleted', {
       hasText: 'change slightly over time'
     })
-    await paragraphPart.hover()
-    await paragraphPart.locator('.review-hunk-controls .edit').click()
+    await expect(paragraphPart).toHaveCount(1)
+    await clickCardAction(page, 'change slightly over time', 'edit')
 
     const paragraphEditor = page.locator('.review-hunk-editor')
     await expect(paragraphEditor.locator('textarea')).toHaveValue(
@@ -140,8 +140,8 @@ test.describe('inline diff review mode', () => {
     // hunk in its region, so the region itself also disappears).
     const listRegionsBefore = await page.locator('.review-region').count()
     const listPart = page.locator('.review-part.review-added', { hasText: 'item three' })
-    await listPart.hover()
-    await listPart.locator('.review-hunk-controls .edit').click()
+    await expect(listPart).toHaveCount(1)
+    await clickCardAction(page, 'item three', 'edit')
 
     const listEditor = page.locator('.review-hunk-editor')
     await expect(listEditor.locator('textarea')).toHaveValue('- item three')
@@ -169,8 +169,8 @@ test.describe('inline diff review mode', () => {
     // line + fence-open line separate them, a non-splittable boundary), so
     // scope to the code hunk's own deleted part rather than the region.
     const codePart = page.locator('.review-part.review-deleted', { hasText: 'answer = 42' })
-    await codePart.hover()
-    await codePart.locator('.review-hunk-controls .reject').click()
+    await expect(codePart).toHaveCount(1)
+    await clickCardAction(page, 'answer = 42', 'reject')
 
     await expect
       .poll(() => fs.readFileSync(filePath, 'utf-8'), { timeout: 10000 })
@@ -195,9 +195,7 @@ test.describe('inline diff review mode', () => {
       if ((await page.locator('.review-region').count()) === 0) {
         break
       }
-      const region = page.locator('.review-region').first()
-      await region.hover()
-      await region.locator('.review-hunk-controls .accept').first().click()
+      await page.locator('.sug-card .accept').first().click()
       await page.waitForTimeout(300)
     }
 

@@ -1,7 +1,7 @@
 import * as fs from 'node:fs'
 import { expect, test } from '@playwright/test'
 import type { ElectronApplication, Page } from 'playwright'
-import { launchWithMarkdown } from './helpers'
+import { launchWithMarkdown, clickCardAction } from './helpers'
 
 const FIXTURE = [
   '# Inline hybrid fixture',
@@ -74,8 +74,7 @@ test.describe('inline hybrid review rendering', () => {
     // survives contiguously: jsdiff emits this rewrite as word-by-word
     // alternating runs, so the merged text interleaves both sentences — which is
     // precisely why the classifier stacks a hunk this size by default.
-    await stackedDeleted.hover()
-    await stackedDeleted.locator('.review-hunk-controls .toggle-view').click()
+    await clickCardAction(page, 'completely different wording', 'toggle-view')
 
     const mergedRewrite = page.locator('.review-part.review-merged', {
       hasText: 'Keep this intro'
@@ -88,8 +87,7 @@ test.describe('inline hybrid review rendering', () => {
     ).toHaveCount(0)
 
     // Toggling back restores the pair.
-    await mergedRewrite.hover()
-    await mergedRewrite.locator('.review-hunk-controls .toggle-view').click()
+    await clickCardAction(page, 'Keep this intro', 'toggle-view')
     await expect(
       page.locator('.review-part.review-deleted', { hasText: 'completely different wording' })
     ).toHaveCount(1)
@@ -99,9 +97,7 @@ test.describe('inline hybrid review rendering', () => {
   })
 
   test('accepting a merged hunk resolves it and writes the proposed text', async() => {
-    const merged = page.locator('.review-part.review-merged', { hasText: 'printing' })
-    await merged.hover()
-    await merged.locator('.review-hunk-controls .accept').click()
+    await clickCardAction(page, 'printing', 'accept')
 
     // The hunk melts back: no merged part left for it, and the marks are gone.
     await expect(page.locator('.review-part.review-merged', { hasText: 'printing' })).toHaveCount(

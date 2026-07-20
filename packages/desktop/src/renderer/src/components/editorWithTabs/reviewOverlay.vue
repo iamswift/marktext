@@ -2,10 +2,14 @@
   <div
     ref="overlayRef"
     class="review-overlay"
+    :class="wide ? 'wide' : 'narrow'"
     tabindex="0"
     @keydown="onKeydown"
   >
-    <div class="review-document">
+    <div
+      class="review-document"
+      :class="{ 'two-column': wide }"
+    >
       <template
         v-for="row in renderedRows"
         :key="row.key"
@@ -37,7 +41,7 @@
                 :data-hunk-id="part.hunkId"
               >
                 <review-hunk-controls
-                  v-if="part.hunkId && isFirstPartOfHunk(row.segment, partIndex)"
+                  v-if="!wide && part.hunkId && isFirstPartOfHunk(row.segment, partIndex)"
                   :hunk-id="part.hunkId"
                 />
                 <div
@@ -48,19 +52,32 @@
             </template>
           </div>
         </div>
+        <div
+          v-if="wide"
+          class="card-cell"
+        >
+          <review-hunk-card
+            v-for="(cardHunkId, cardIndex) in row.cardHunkIds"
+            :key="cardHunkId"
+            :hunk-id="cardHunkId"
+            :ordinal="row.cardHunkIds.length > 1 ? cardIndex + 1 : undefined"
+          />
+        </div>
       </template>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { renderToStaticHTML } from '@muyajs/core'
 import { annotateMerged, computeRegions } from 'common/diff/regions'
 import { useReviewStore } from '@/store/review'
 import { applyWordMarks } from '@/util/reviewWordMarks'
 import { applyInlineMerge, isSingleParagraph } from '@/util/reviewInlineMerge'
+import { shouldGoWide } from '@/util/reviewLayout'
 import ReviewHunkControls from './reviewHunkControls.vue'
+import ReviewHunkCard from './reviewHunkCard.vue'
 import ReviewHunkEditor from './reviewHunkEditor.vue'
 
 interface RenderedPart {
@@ -220,9 +237,43 @@ const isEditingHunkPart = (
 const isEditingHunkOtherPart = (part: RenderedPart): boolean =>
   part.hunkId !== undefined && reviewStore.editingHunkId === part.hunkId
 
+/**
+ * Margin cards need a card column plus a readable measure beside it. Measured
+ * on the overlay's own content box rather than the window, because the sidebar
+ * and TOC panel take width the window size does not reflect.
+ */
+const wide = ref(false)
+let resizeObserver: ResizeObserver | null = null
+let resizeFrame = 0
+
 onMounted(() => {
   // Takes keyboard focus away from the (neutralized) contenteditable editor.
   overlayRef.value?.focus()
+
+  if (!overlayRef.value || typeof ResizeObserver === 'undefined') {
+    return
+  }
+  resizeObserver = new ResizeObserver((entries) => {
+    const entry = entries[0]
+    const width = entry.contentBoxSize?.[0]?.inlineSize ?? entry.contentRect.width
+    // Flipping the mode changes layout, which can re-fire the observer in the
+    // same frame ("loop completed with undelivered notifications"); defer and
+    // bail when the answer has not changed.
+    cancelAnimationFrame(resizeFrame)
+    resizeFrame = requestAnimationFrame(() => {
+      const next = shouldGoWide(width, wide.value)
+      if (next !== wide.value) {
+        wide.value = next
+      }
+    })
+  })
+  resizeObserver.observe(overlayRef.value)
+})
+
+onBeforeUnmount(() => {
+  cancelAnimationFrame(resizeFrame)
+  resizeObserver?.disconnect()
+  resizeObserver = null
 })
 
 // Keeps the focused hunk in view as focusNext/focusPrev (keyboard or the
@@ -308,6 +359,36 @@ const onKeydown = (event: KeyboardEvent): void => {
   line-height: 1.6;
 }
 
+/* Document and margin cards are flat grid siblings, paired into a row by
+   explicit grid-column. That pairing is the whole vertical-alignment
+   mechanism — a card's top meets its paragraph with no JS positioning. */
+.review-document.two-column {
+  display: grid;
+  grid-template-columns:
+    minmax(0, var(--editorAreaWidth, 750px))
+    var(--reviewCardCol, 280px);
+  column-gap: var(--reviewCardGap, 28px);
+  row-gap: 0;
+  max-width: calc(
+    var(--editorAreaWidth, 750px) + var(--reviewCardCol, 280px) + var(--reviewCardGap, 28px)
+  );
+}
+
+.review-document.two-column > .doc-cell,
+.review-document.two-column > .card-cell {
+  /* Grid items default to min-width:auto, so a wide <pre> or <table> would
+     blow its track out and push the card column off-screen. */
+  min-width: 0;
+}
+
+.review-document.two-column > .doc-cell {
+  grid-column: 1;
+}
+
+.review-document.two-column > .card-cell {
+  grid-column: 2;
+}
+
 /* Rendered markdown fragments bring their own <p> margins (user-agent
    default ~1em top/bottom); left alone, that stacks with .review-part's
    own margin and inflates the gap around every diff block. Reset them and
@@ -330,8 +411,10 @@ const onKeydown = (event: KeyboardEvent): void => {
   margin: 1px 0;
 }
 
-.review-region:hover :deep(.review-hunk-controls),
-.review-region.active :deep(.review-hunk-controls) {
+/* Narrow only: in the two-column layout every action lives in the margin card
+   and the document column holds no buttons at all. */
+.review-overlay.narrow .review-region:hover :deep(.review-hunk-controls),
+.review-overlay.narrow .review-region.active :deep(.review-hunk-controls) {
   opacity: 1;
   pointer-events: auto;
 }
