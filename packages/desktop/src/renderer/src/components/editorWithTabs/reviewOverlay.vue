@@ -7,27 +7,27 @@
   >
     <div class="review-document">
       <template
-        v-for="(segment, index) in renderedSegments"
-        :key="`s-${index}`"
+        v-for="row in renderedRows"
+        :key="row.key"
       >
         <div class="doc-cell">
           <div
-            v-if="segment.kind === 'unchanged'"
+            v-if="row.segment.kind === 'unchanged'"
             class="review-segment"
-            v-html="segment.html"
+            v-html="row.segment.html"
           />
           <div
             v-else
             class="review-region"
-            :class="{ active: isActiveRegion(segment) }"
-            :data-hunk-ids="segment.hunkIds.join(' ')"
+            :class="{ active: isActiveRegion(row.segment) }"
+            :data-hunk-ids="row.segment.hunkIds.join(' ')"
           >
             <template
-              v-for="(part, partIndex) in segment.parts"
+              v-for="(part, partIndex) in row.segment.parts"
               :key="partIndex"
             >
               <review-hunk-editor
-                v-if="part.hunkId && isEditingHunkPart(segment, part, partIndex)"
+                v-if="part.hunkId && isEditingHunkPart(row.segment, part, partIndex)"
                 :hunk-id="part.hunkId"
               />
               <div
@@ -37,7 +37,7 @@
                 :data-hunk-id="part.hunkId"
               >
                 <review-hunk-controls
-                  v-if="part.hunkId && isFirstPartOfHunk(segment, partIndex)"
+                  v-if="part.hunkId && isFirstPartOfHunk(row.segment, partIndex)"
                   :hunk-id="part.hunkId"
                 />
                 <div
@@ -72,6 +72,18 @@ interface RenderedPart {
 type RenderedSegment =
   | { kind: 'unchanged'; html: string }
   | { kind: 'region'; hunkIds: string[]; parts: RenderedPart[] }
+
+/**
+ * One row of the review layout: a document cell and the cards that belong
+ * beside it. In the two-column layout both are emitted as flat grid siblings,
+ * so a row is a pairing rather than a container.
+ */
+interface RenderRow {
+  key: string
+  segment: RenderedSegment
+  /** Hunks needing a margin card here, in document order; empty for context. */
+  cardHunkIds: string[]
+}
 
 const reviewStore = useReviewStore()
 const overlayRef = ref<HTMLElement | null>(null)
@@ -158,6 +170,26 @@ const renderedSegments = computed<RenderedSegment[]>(() => {
     return { kind: 'region', hunkIds: segment.hunkIds, parts }
   })
 })
+
+/**
+ * Projects segments into layout rows. Kept as a separate pass so the merge and
+ * word-mark logic above stays untouched.
+ *
+ * Row keys lead with the hunk ids rather than the index alone: deciding a hunk
+ * melts it into context and shifts every later index, which would repatch the
+ * whole document and lose scroll position. Keying on content holds a region's
+ * identity steady across a melt. The index still tiebreaks repeated context.
+ */
+const renderedRows = computed<RenderRow[]>(() =>
+  renderedSegments.value.map((segment, index) => {
+    const hunkIds = segment.kind === 'region' ? segment.hunkIds : []
+    return {
+      key: `${segment.kind}:${hunkIds.join(',')}:${index}`,
+      segment,
+      cardHunkIds: hunkIds
+    }
+  })
+)
 
 const isActiveRegion = (segment: { hunkIds: string[] }): boolean =>
   reviewStore.activeHunkId !== null && segment.hunkIds.includes(reviewStore.activeHunkId)
