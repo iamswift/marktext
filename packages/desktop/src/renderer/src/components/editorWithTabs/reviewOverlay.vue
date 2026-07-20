@@ -37,6 +37,7 @@
               <div
                 v-else-if="node.kind === 'stack'"
                 class="hunk-card"
+                :class="{ spot: isSpotlit(node.hunkId) }"
                 :data-hunk-id="node.hunkId"
               >
                 <div class="side before">
@@ -83,7 +84,7 @@
               <div
                 v-else
                 class="review-part"
-                :class="`review-${node.part.role}`"
+                :class="[`review-${node.part.role}`, { spot: isSpotlit(node.part.hunkId) }]"
                 :data-hunk-id="node.part.hunkId"
               >
                 <review-hunk-controls
@@ -345,6 +346,12 @@ const renderedRows = computed<RenderRow[]>(() =>
 const isActiveRegion = (segment: { hunkIds: string[] }): boolean =>
   reviewStore.activeHunkId !== null && segment.hunkIds.includes(reviewStore.activeHunkId)
 
+// The spotlight tints; activeHunkId outlines. Separate channels, so the
+// pointer highlight and the keyboard cursor can show at once without reading
+// as the same thing.
+const isSpotlit = (hunkId?: string): boolean =>
+  hunkId !== undefined && reviewStore.spotlightHunkId === hunkId
+
 let resizeObserver: ResizeObserver | null = null
 let resizeFrame = 0
 
@@ -385,6 +392,12 @@ watch(
   () => reviewStore.activeHunkId,
   (hunkId) => {
     if (!hunkId) {
+      return
+    }
+    if (reviewStore.suppressNextFocusScroll) {
+      // A card click moved the cursor here; the paragraph is already on screen
+      // beside that card, so scrolling would displace what the user clicked.
+      reviewStore.suppressNextFocusScroll = false
       return
     }
     nextTick(() => {
@@ -436,7 +449,13 @@ const onKeydown = (event: KeyboardEvent): void => {
     reviewStore.beginEdit(reviewStore.activeHunkId)
   } else if (key === 'Escape') {
     event.preventDefault()
-    reviewStore.requestExit()
+    // Escape dismisses the spotlight first — otherwise there is no keyboard
+    // way out of it — and exits the review on a second press.
+    if (reviewStore.spotlightHunkId) {
+      reviewStore.setSpotlight(null)
+    } else {
+      reviewStore.requestExit()
+    }
   }
 }
 </script>
@@ -588,6 +607,17 @@ const onKeydown = (event: KeyboardEvent): void => {
    word-level marks below are what distinguish them. */
 .review-merged {
   background: var(--diffMergedBg, transparent);
+}
+
+/* Spotlight tints; .active outlines. Two channels so the pointer highlight and
+   the keyboard cursor never read as the same state. */
+.review-part.spot {
+  background: var(--diffSpotBg, rgba(127, 166, 207, 0.16));
+}
+
+.hunk-card.spot {
+  border-color: var(--diffSpotBorder, rgba(127, 166, 207, 0.8));
+  box-shadow: 0 2px 10px rgba(51, 97, 143, 0.16);
 }
 
 .review-region.active {

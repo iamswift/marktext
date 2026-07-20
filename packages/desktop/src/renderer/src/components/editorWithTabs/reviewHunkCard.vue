@@ -1,10 +1,12 @@
 <template>
   <div
     class="sug-card"
-    :class="{ editing }"
+    :class="{ editing, active: spotted }"
     :data-hunk="hunkId"
     role="group"
     :aria-label="kindText"
+    @click="onCardClick"
+    @focusin="spotlight"
   >
     <div class="kind">
       <span
@@ -95,6 +97,7 @@ const reviewStore = useReviewStore()
 
 const hunk = computed(() => reviewStore.hunks.find((candidate) => candidate.id === props.hunkId))
 const editing = computed(() => reviewStore.editingHunkId === props.hunkId)
+const spotted = computed(() => reviewStore.spotlightHunkId === props.hunkId)
 const delta = computed(() => (hunk.value ? summarizeHunk(hunk.value) : null))
 
 // Singular and plural are separate keys: vue-i18n plural parsing is disabled
@@ -142,6 +145,15 @@ const toggleLabel = computed(() =>
     : t('review.viewInline')
 )
 
+// Clicking the card body toggles; tabbing into it only ever sets, so moving
+// focus through the buttons cannot flicker the highlight off.
+const onCardClick = (): void => {
+  reviewStore.setSpotlight(spotted.value ? null : props.hunkId)
+}
+const spotlight = (): void => {
+  reviewStore.setSpotlight(props.hunkId)
+}
+
 const accept = (): void => {
   reviewStore.decide(props.hunkId, { kind: 'accept' }).catch(console.error)
 }
@@ -178,9 +190,14 @@ const toggleView = (): void => {
     box-shadow 0.15s ease;
 }
 
-.sug-card:hover {
+.sug-card:hover,
+.sug-card.active {
   border-color: var(--reviewCardHoverBorder, rgba(146, 179, 216, 0.9));
   box-shadow: var(--reviewCardHoverShadow, 0 2px 8px rgba(51, 97, 143, 0.18));
+}
+
+.sug-card {
+  cursor: pointer;
 }
 
 .kind {

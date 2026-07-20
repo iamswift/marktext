@@ -57,6 +57,8 @@
   --reviewCardRailPending: rgba(127, 166, 207, 0.7);
   --reviewCardRailDecided: rgba(87, 171, 90, 0.7);
   --reviewCardRailRestored: rgba(229, 83, 75, 0.6);
+  --diffSpotBg: rgba(127, 166, 207, 0.2);
+  --diffSpotBorder: rgba(127, 166, 207, 0.75);
 
   --buttonFontColor: rgba(255, 255, 255, 0.6);
   --buttonBgColor: #424344;

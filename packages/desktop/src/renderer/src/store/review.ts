@@ -52,6 +52,15 @@ interface ReviewState {
    * otherwise land on an unrelated hunk.
    */
   viewOverrides: Map<string, ReviewViewKind>
+  /**
+   * The hunk the user clicked a margin card for. Kept separate from
+   * activeHunkId: that one is the keyboard cursor and must always point at an
+   * undecided hunk, while a spotlight is pointer-driven, freely cleared, and
+   * must never scroll.
+   */
+  spotlightHunkId: string | null
+  /** Consumed by the overlay's focus watcher; see setSpotlight. */
+  suppressNextFocusScroll: boolean
   activeHunkId: string | null
   editingHunkId: string | null
   diskMeta: ReviewChangeData | null
@@ -69,6 +78,8 @@ const initialState = (): ReviewState => ({
   hunks: [],
   decisions: new Map(),
   viewOverrides: new Map(),
+  spotlightHunkId: null,
+  suppressNextFocusScroll: false,
   activeHunkId: null,
   editingHunkId: null,
   diskMeta: null,
@@ -139,6 +150,8 @@ export const useReviewStore = defineStore('review', {
         hunks,
         decisions: new Map(),
         viewOverrides: new Map(),
+        spotlightHunkId: null,
+        suppressNextFocusScroll: false,
         activeHunkId: hunks[0].id,
         editingHunkId: null,
         diskMeta: change.data,
@@ -150,6 +163,22 @@ export const useReviewStore = defineStore('review', {
 
     exitReview(): void {
       Object.assign(this, initialState())
+    },
+
+    /**
+     * Highlights one hunk and its margin card. Also points the keyboard cursor
+     * at it so a/r/e act on what was clicked — but raises
+     * suppressNextFocusScroll, because the card is already beside its
+     * paragraph and scrolling it to centre would yank the page away from the
+     * pointer. Decided hunks are left alone: activeHunkId must stay on
+     * something still decidable.
+     */
+    setSpotlight(hunkId: string | null): void {
+      this.spotlightHunkId = hunkId
+      if (hunkId && !this.decisions.has(hunkId) && this.activeHunkId !== hunkId) {
+        this.suppressNextFocusScroll = true
+        this.activeHunkId = hunkId
+      }
     },
 
     /** Flips one hunk between the merged and before/after renderings. */
@@ -175,6 +204,10 @@ export const useReviewStore = defineStore('review', {
       this.decisions.set(hunkId, decision)
       if (this.editingHunkId === hunkId) {
         this.editingHunkId = null
+      }
+      if (this.spotlightHunkId === hunkId) {
+        // The hunk melts into context on the next render — nothing left to lit.
+        this.spotlightHunkId = null
       }
       if (this.activeHunkId === hunkId) {
         this.activeHunkId = this.undecidedHunks[0]?.id ?? null
@@ -360,9 +393,12 @@ export const useReviewStore = defineStore('review', {
         proposedText: change.data.markdown,
         hunks: newHunks,
         decisions: carried,
-        // Decisions are carried across by contentKey, but views are not: the
-        // ids they were keyed to no longer refer to the same hunks.
+        // Decisions are carried across by contentKey, but views and the
+        // spotlight are not: the ids they were keyed to no longer refer to the
+        // same hunks.
         viewOverrides: new Map(),
+        spotlightHunkId: null,
+        suppressNextFocusScroll: false,
         activeHunkId: newHunks.find((hunk) => !carried.has(hunk.id))?.id ?? null,
         editingHunkId: null,
         diskMeta: change.data,
