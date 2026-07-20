@@ -240,8 +240,9 @@ main process  (packages/desktop/src/main/)
 
 preload  (packages/desktop/src/preload/)
   ├── Bridge between main and renderer
-  ├── Note: editor and preferences windows use contextIsolation: false +
-  │   nodeIntegration: true (see packages/desktop/src/main/config.js)
+  ├── Editor and preferences windows are both sandboxed: contextIsolation:
+  │   true, sandbox: true, nodeIntegration: false (see
+  │   packages/desktop/src/main/config.ts). Both do set webSecurity: false.
   └── Compiled to CommonJS
 
 renderer  (packages/desktop/src/renderer/)
