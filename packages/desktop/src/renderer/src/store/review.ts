@@ -247,6 +247,30 @@ export const useReviewStore = defineStore('review', {
      */
     syntaxOnlyRunCount() {
       return (hunkId: string): number => this.syntaxOnlyRuns.get(hunkId)?.length ?? 0
+    },
+    /**
+     * A hunk's own decided-vs-decidable run tally (US-015), for the progress
+     * track's partial fill — distinct from isHunkDecided's yes/no. A hunk
+     * with no decidable runs (uncorrelated, or a pure add/delete) reports
+     * `decidable: 0`, so callers can only render it binary, matching
+     * pre-US-015 behavior. A whole-hunk decision (e.g. an edit) always wins
+     * outright over any per-run tally, same precedence as isHunkDecided, so
+     * it reports as fully decided rather than whatever runDecisions happens
+     * to hold underneath it.
+     */
+    hunkRunProgress() {
+      return (hunkId: string): { decided: number; decidable: number } => {
+        const decidable = this.decidableRuns.get(hunkId) ?? []
+        if (decidable.length === 0) {
+          return { decided: 0, decidable: 0 }
+        }
+        if (this.decisions.has(hunkId)) {
+          return { decided: decidable.length, decidable: decidable.length }
+        }
+        const runs = this.runDecisions.get(hunkId)
+        const decided = decidable.filter((index) => runs?.has(index)).length
+        return { decided, decidable: decidable.length }
+      }
     }
   },
 

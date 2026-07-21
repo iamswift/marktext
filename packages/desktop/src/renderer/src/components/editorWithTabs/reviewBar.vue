@@ -61,8 +61,20 @@
         {{ t('review.exit') }}
       </button>
     </div>
-    <div class="track">
+    <div
+      class="track"
+      role="progressbar"
+      aria-valuemin="0"
+      aria-valuemax="100"
+      :aria-valuenow="trackAriaValueNow"
+      :aria-label="trackAriaLabel"
+    >
       <i :style="{ width: `${progressPercent}%` }" />
+      <span
+        v-if="partialPercent > 0"
+        class="partial"
+        :style="{ left: `${progressPercent}%`, width: `${partialPercent}%` }"
+      />
     </div>
   </div>
 </template>
@@ -78,6 +90,52 @@ const progressPercent = computed(() => {
   const total = reviewStore.hunks.length
   return total === 0 ? 0 : Math.round((reviewStore.decidedCount / total) * 100)
 })
+
+// Extra credit toward the track's fill for a hunk that is only partway
+// through its correlated runs — rendered as a visually distinct segment
+// appended after progressPercent so a paragraph mid-triage moves the track
+// instead of sitting flush with the untouched hunks around it.
+const partialFraction = computed(() => {
+  const total = reviewStore.hunks.length
+  if (total === 0) {
+    return 0
+  }
+  const sum = reviewStore.hunks.reduce((acc, hunk) => {
+    if (reviewStore.isHunkDecided(hunk.id)) {
+      return acc
+    }
+    const { decided, decidable } = reviewStore.hunkRunProgress(hunk.id)
+    return decidable > 0 ? acc + decided / decidable : acc
+  }, 0)
+  return sum / total
+})
+
+const partialPercent = computed(() => Math.round(partialFraction.value * 100))
+
+const partialHunkCount = computed(() =>
+  reviewStore.hunks.filter((hunk) => {
+    if (reviewStore.isHunkDecided(hunk.id)) {
+      return false
+    }
+    const { decided, decidable } = reviewStore.hunkRunProgress(hunk.id)
+    return decidable > 0 && decided > 0
+  }).length
+)
+
+const trackAriaValueNow = computed(() => Math.min(100, progressPercent.value + partialPercent.value))
+
+const trackAriaLabel = computed(() =>
+  partialHunkCount.value > 0
+    ? t('review.trackProgressPartial', {
+      done: reviewStore.decidedCount,
+      total: reviewStore.hunks.length,
+      partial: partialHunkCount.value
+    })
+    : t('review.trackProgress', {
+      done: reviewStore.decidedCount,
+      total: reviewStore.hunks.length
+    })
+)
 
 const acceptAll = (): void => {
   reviewStore.acceptAll().catch(console.error)
@@ -124,6 +182,7 @@ const undoLast = (): void => {
 
 .track {
   grid-column: 1 / -1;
+  position: relative;
   height: 5px;
   border-radius: 3px;
   background: var(--editorColor10, rgba(128, 128, 128, 0.15));
@@ -135,6 +194,29 @@ const undoLast = (): void => {
   height: 100%;
   background: var(--themeColor);
   transition: width 0.25s ease;
+}
+
+/*
+ * The partial-credit segment for hunks with some but not all runs decided
+ * (US-015). Positioned to pick up right where the solid `i` fill ends, and
+ * given a diagonal hatch rather than a plain lighter tint so the "in
+ * progress" state still reads at a glance for a viewer who can't rely on
+ * hue/opacity alone.
+ */
+.track > .partial {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  background:
+    repeating-linear-gradient(
+      135deg,
+      var(--themeColor) 0,
+      var(--themeColor) 2px,
+      transparent 2px,
+      transparent 4px
+    ),
+    var(--themeColor30);
+  transition: width 0.25s ease, left 0.25s ease;
 }
 
 .review-bar-status {

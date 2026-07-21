@@ -998,6 +998,8 @@
     "undoLast": "↺ Undo last change",
     "undoLastHint": "Change your mind — put the change you just decided back up for review",
     "progressOf": "of {total} changes reviewed",
+    "trackProgress": "{done} of {total} changes fully reviewed",
+    "trackProgressPartial": "{done} of {total} changes fully reviewed, {partial} partially reviewed",
     "unsavedBaselineBanner": "This review started from unsaved edits — accepted changes are layered on top of them.",
     "exitPromptMessage": "{count} changes are still undecided. What do you want to do before leaving review?",
     "acceptRemaining": "Keep remaining",

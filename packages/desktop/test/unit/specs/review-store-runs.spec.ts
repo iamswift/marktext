@@ -875,3 +875,80 @@ describe('useReviewStore lastDecidedUnit (US-014)', () => {
     expect(paragraphHunk).toBeDefined()
   })
 })
+
+describe('useReviewStore hunkRunProgress (US-015)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    invokeMock().mockResolvedValue(undefined)
+  })
+
+  it('reports decided: 0 when a correlated hunk has no runs decided yet', () => {
+    const store = useReviewStore()
+    store.enterReview(makeTab3(), change(prop3))
+    const hunkId = store.hunks[0].id
+    store.setDecidableRuns(hunkId, [0, 1, 2])
+
+    expect(store.hunkRunProgress(hunkId)).toEqual({ decided: 0, decidable: 3 })
+  })
+
+  it('reports a partial tally once some but not all decidable runs are decided', async() => {
+    const store = useReviewStore()
+    store.enterReview(makeTab3(), change(prop3))
+    const hunkId = store.hunks[0].id
+    store.setDecidableRuns(hunkId, [0, 1, 2])
+
+    await store.decideRun(hunkId, 0, 'accept')
+
+    expect(store.hunkRunProgress(hunkId)).toEqual({ decided: 1, decidable: 3 })
+  })
+
+  it('reports decided === decidable once every decidable run has a decision', async() => {
+    const store = useReviewStore()
+    vi.spyOn(useEditorStore(), 'loadChange').mockImplementation(() => {})
+    // Two hunks (paragraphHunk + lineHunk) so fully deciding paragraphHunk's
+    // runs here does not finalize the whole review out from under this test
+    // — lineHunk is left undecided on purpose.
+    store.enterReview(makeTabMulti(), change(propMulti))
+    const [paragraphHunk] = store.hunks
+    store.setDecidableRuns(paragraphHunk.id, [0, 1, 2])
+
+    await store.decideRun(paragraphHunk.id, 0, 'accept')
+    await store.decideRun(paragraphHunk.id, 1, 'accept')
+    await store.decideRun(paragraphHunk.id, 2, 'reject')
+
+    expect(store.hunkRunProgress(paragraphHunk.id)).toEqual({ decided: 3, decidable: 3 })
+  })
+
+  it('reports decidable: 0 for an uncorrelated hunk, before and after its whole-hunk decision', async() => {
+    const store = useReviewStore()
+    vi.spyOn(useEditorStore(), 'loadChange').mockImplementation(() => {})
+    store.enterReview(makeTabMulti(), change(propMulti))
+    const [, lineHunk] = store.hunks
+    // lineHunk is never correlated (no setDecidableRuns call), so it can
+    // never carry partial credit — only the pre-US-015 binary states.
+
+    expect(store.hunkRunProgress(lineHunk.id)).toEqual({ decided: 0, decidable: 0 })
+
+    await store.decide(lineHunk.id, { kind: 'accept' })
+
+    expect(store.hunkRunProgress(lineHunk.id)).toEqual({ decided: 0, decidable: 0 })
+  })
+
+  it('a whole-hunk edit decision on a correlated hunk reports fully decided, same precedence as isHunkDecided', async() => {
+    const store = useReviewStore()
+    vi.spyOn(useEditorStore(), 'loadChange').mockImplementation(() => {})
+    // Same two-hunk setup — the edit decision below must not finalize the
+    // review, or the store resets before the assertion below can run.
+    store.enterReview(makeTabMulti(), change(propMulti))
+    const [paragraphHunk] = store.hunks
+    store.setDecidableRuns(paragraphHunk.id, [0, 1, 2])
+
+    await store.decide(paragraphHunk.id, {
+      kind: 'edit',
+      lines: ['the slow fox leaps over the sleepy dog', 'two']
+    })
+
+    expect(store.hunkRunProgress(paragraphHunk.id)).toEqual({ decided: 3, decidable: 3 })
+  })
+})
