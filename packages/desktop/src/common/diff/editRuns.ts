@@ -116,3 +116,60 @@ export const computeEditRuns = (hunk: DiffHunk): EditRun[] => {
 
   return runs
 }
+
+/**
+ * Normalizes run text for cross-coordinate-system comparison. A decision is
+ * anchored to a source run (markdown), but review UI selection happens on a
+ * rendered run (DOM text) — `**bold**` in source vs. `bold` on screen — so
+ * alignment can't compare raw text. Marker-stripping runs before whitespace
+ * collapse: removing `**`/`_`/`` ` `` can leave behind a doubled space (e.g.
+ * `*a* *b*` -> `a  b`), which the collapse pass then needs to fold.
+ */
+export const normalizeRunText = (text: string): string =>
+  text
+    .normalize('NFC')
+    .replace(/[*_`]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+
+/**
+ * Correlates source runs (write-back coordinates) to rendered runs (what the
+ * reviewer selected on screen) by normalized text equality. Matching is
+ * greedy and sequential: for each source run, the earliest not-yet-consumed
+ * rendered run whose normalized delText and addText both match is taken.
+ *
+ * R1: when a source run has no match, it must NOT consume a rendered run or
+ * advance past any — the next source run has to remain free to match the
+ * same rendered run the failed one would have taken. Without this, one
+ * unmatchable run silently vetoes the alignment of every run after it.
+ *
+ * Matches are also monotonic: the search floor only ever moves forward, so
+ * two runs whose normalized text is identical can never cross and bind a
+ * decision to the wrong position on screen. Both sequences describe the same
+ * paragraph in document order, so a legitimate match is never behind the
+ * floor and monotonicity costs no correlation rate.
+ */
+export const alignRuns = (
+  sourceRuns: readonly EditRun[],
+  renderedRuns: readonly EditRun[]
+): Array<number | null> => {
+  let floor = 0
+
+  return sourceRuns.map((sourceRun) => {
+    const normDel = normalizeRunText(sourceRun.delText)
+    const normAdd = normalizeRunText(sourceRun.addText)
+
+    for (let i = floor; i < renderedRuns.length; i++) {
+      const candidate = renderedRuns[i]
+      if (
+        normalizeRunText(candidate.delText) === normDel &&
+        normalizeRunText(candidate.addText) === normAdd
+      ) {
+        floor = i + 1
+        return i
+      }
+    }
+
+    return null
+  })
+}

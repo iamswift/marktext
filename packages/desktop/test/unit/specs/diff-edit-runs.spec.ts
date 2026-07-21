@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { DiffHunk } from 'common/diff'
-import { computeEditRuns } from 'common/diff/editRuns'
+import { alignRuns, computeEditRuns, normalizeRunText, type EditRun } from 'common/diff/editRuns'
 
 let seq = 0
 const hunk = (
@@ -177,5 +177,92 @@ describe('computeEditRuns', () => {
     for (const h of fixtures) {
       expectRunsRoundTrip(h, computeEditRuns(h))
     }
+  })
+})
+
+// Offsets are irrelevant to normalization/alignment, so fixtures below only
+// populate delText/addText and zero out the rest.
+const run = (index: number, delText: string, addText: string): EditRun => ({
+  index,
+  id: `r${index}`,
+  delText,
+  addText,
+  baseStart: 0,
+  baseEnd: 0,
+  propStart: 0,
+  propEnd: 0
+})
+
+describe('normalizeRunText', () => {
+  it('makes emphasis markup compare equal to the rendered plain text', () => {
+    expect(normalizeRunText('**bold**')).toBe('bold')
+    expect(normalizeRunText('_bold_')).toBe('bold')
+    expect(normalizeRunText('**bold**')).toBe(normalizeRunText('_bold_'))
+  })
+
+  it('strips backtick code markers too', () => {
+    expect(normalizeRunText('`code`')).toBe('code')
+  })
+
+  it('collapses internal whitespace runs to a single space and trims', () => {
+    expect(normalizeRunText('  the   quick\tbrown  fox  ')).toBe('the quick brown fox')
+  })
+
+  it('collapses whitespace left behind by stripped markers', () => {
+    // Stripping "* *" would otherwise leave "word  word" (two spaces); the
+    // collapse pass must run after stripping, not before.
+    expect(normalizeRunText('*a* *b*')).toBe('a b')
+  })
+})
+
+describe('alignRuns', () => {
+  it('matches equal source and rendered runs one-to-one in order', () => {
+    const source = [run(0, 'foo', 'bar'), run(1, 'baz', 'qux')]
+    const rendered = [run(0, 'foo', 'bar'), run(1, 'baz', 'qux')]
+    expect(alignRuns(source, rendered)).toEqual([0, 1])
+  })
+
+  it('matches through markdown syntax differences via normalization', () => {
+    const source = [run(0, '**priting**', 'printing')]
+    const rendered = [run(0, 'priting', 'printing')]
+    expect(alignRuns(source, rendered)).toEqual([0])
+  })
+
+  it('R1: an unmatchable middle run yields null without shifting its neighbours', () => {
+    const source = [run(0, 'foo', 'bar'), run(1, 'unmatched', 'nope'), run(2, 'baz', 'qux')]
+    const rendered = [run(0, 'foo', 'bar'), run(1, 'baz', 'qux')]
+    expect(alignRuns(source, rendered)).toEqual([0, null, 1])
+  })
+
+  it('R1: a leading unmatchable run does not consume the match meant for the next run', () => {
+    const source = [run(0, 'unmatched', 'nope'), run(1, 'foo', 'bar')]
+    const rendered = [run(0, 'foo', 'bar')]
+    expect(alignRuns(source, rendered)).toEqual([null, 0])
+  })
+
+  it('never binds a later source run to an earlier rendered run', () => {
+    // Both sequences describe the same paragraph in document order, so a
+    // crossing match means the alignment is wrong, not merely unordered —
+    // it would bind a decision to the wrong change on screen. Matching is
+    // monotonic, so the out-of-order candidate goes unmatched instead.
+    const source = [run(0, 'second', 'B'), run(1, 'first', 'A')]
+    const rendered = [run(0, 'first', 'A'), run(1, 'second', 'B')]
+    expect(alignRuns(source, rendered)).toEqual([1, null])
+  })
+
+  it('never matches the same rendered run twice for identically-normalizing source runs', () => {
+    const source = [run(0, '**dup**', 'x'), run(1, '_dup_', 'x')]
+    const rendered = [run(0, 'dup', 'x'), run(1, 'dup', 'x')]
+    expect(alignRuns(source, rendered)).toEqual([0, 1])
+  })
+
+  it('leaves a source run unmatched when only delText or only addText normalizes equal', () => {
+    const source = [run(0, 'foo', 'bar')]
+    const rendered = [run(0, 'foo', 'different')]
+    expect(alignRuns(source, rendered)).toEqual([null])
+  })
+
+  it('returns an empty array for empty source runs', () => {
+    expect(alignRuns([], [run(0, 'foo', 'bar')])).toEqual([])
   })
 })
