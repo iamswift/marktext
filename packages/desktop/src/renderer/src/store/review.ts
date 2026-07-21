@@ -102,10 +102,19 @@ interface ReviewState {
   /** Consumed by the overlay's focus watcher; see setSpotlight. */
   suppressNextFocusScroll: boolean
   /**
-   * The single change "Undo last change" would restore. Null after a bulk
-   * decision, since there is no one change left to single out.
+   * The single hunk-level user action "Undo last change" would restore, in
+   * one of three shapes the review bar dispatches on:
+   *  - `runIndex` present: one edit run decided via decideRun — undo via
+   *    revertRun.
+   *  - `filledRuns` present: a hunk-level decide()/"Keep all" that resolved a
+   *    run-correlated hunk by bulk-filling its still-pending runs — undo via
+   *    revertFilledRuns, which reverts only those indexes.
+   *  - neither present: a whole-hunk decision on an uncorrelated hunk — undo
+   *    via undecide.
+   * Null after a whole-document bulk action (acceptAll/rejectAll spans many
+   * hunks at once), since there is no one change left to single out.
    */
-  lastDecidedHunkId: string | null
+  lastDecidedUnit: { hunkId: string; runIndex?: number; filledRuns?: number[] } | null
   activeHunkId: string | null
   /**
    * US-013's Tab/Shift+Tab cursor: which of activeHunkId's decidableRuns
@@ -147,7 +156,7 @@ const initialState = (): ReviewState => ({
   viewOverrides: new Map(),
   spotlightHunkId: null,
   suppressNextFocusScroll: false,
-  lastDecidedHunkId: null,
+  lastDecidedUnit: null,
   activeHunkId: null,
   activeRunIndex: null,
   editingHunkId: null,
@@ -284,7 +293,7 @@ export const useReviewStore = defineStore('review', {
         viewOverrides: new Map(),
         spotlightHunkId: null,
         suppressNextFocusScroll: false,
-        lastDecidedHunkId: null,
+        lastDecidedUnit: null,
         activeHunkId: hunks[0].id,
         activeRunIndex: null,
         editingHunkId: null,
@@ -343,8 +352,8 @@ export const useReviewStore = defineStore('review', {
       // rather than leaving a stale timer to fire again after this one.
       this._clearWriteTimers()
       this.decisions.delete(hunkId)
-      if (this.lastDecidedHunkId === hunkId) {
-        this.lastDecidedHunkId = null
+      if (this.lastDecidedUnit?.hunkId === hunkId) {
+        this.lastDecidedUnit = null
       }
       // Put the cursor on what just came back so a/r/e act on it.
       this._setActiveHunk(hunkId)
@@ -385,8 +394,12 @@ export const useReviewStore = defineStore('review', {
       // covers it too, instead of a stale timer duplicating it later.
       this._clearWriteTimers()
 
-      this._applyHunkDecision(hunkId, decision)
+      const filledRuns = this._applyHunkDecision(hunkId, decision)
       this._settleHunk(hunkId)
+      // This is one user action on one paragraph either way, so it stays
+      // undoable whether or not it happened to resolve via bulk-fill — only
+      // the shape of what Undo reverts differs. See _applyHunkDecision.
+      this.lastDecidedUnit = filledRuns !== null ? { hunkId, filledRuns } : { hunkId }
 
       await this._writeResolved()
       this._maybeFinalize()
@@ -413,6 +426,10 @@ export const useReviewStore = defineStore('review', {
         this.runDecisions.set(hunkId, runs)
       }
       runs.set(runIndex, kind)
+      // This is always a single-run decision — set unconditionally, whether
+      // or not it also happens to complete the hunk below, so Undo still
+      // singles out this one run rather than the whole hunk.
+      this.lastDecidedUnit = { hunkId, runIndex }
 
       if (!this.isHunkDecided(hunkId)) {
         this._scheduleDebouncedWrite()
@@ -448,7 +465,42 @@ export const useReviewStore = defineStore('review', {
       if (runs.size === 0) {
         this.runDecisions.delete(hunkId)
       }
+      if (this.lastDecidedUnit?.hunkId === hunkId && this.lastDecidedUnit.runIndex === runIndex) {
+        this.lastDecidedUnit = null
+      }
       this._scheduleDebouncedWrite()
+    },
+
+    /**
+     * Undoes a hunk-level decide() that resolved through the bulk-fill path
+     * (_fillRemainingRuns): puts back exactly the run indexes that call
+     * filled, leaving any run the user had already decided by hand — which
+     * the fill skipped over — untouched. undecide() cannot cover this case:
+     * a bulk-filled hunk never gets an entry in `decisions`, only in
+     * `runDecisions`. Writes immediately rather than debouncing, matching
+     * decide()'s own immediate write for the same action.
+     */
+    async revertFilledRuns(hunkId: string, filledRuns: number[]): Promise<void> {
+      if (!this.active) {
+        return
+      }
+      const runs = this.runDecisions.get(hunkId)
+      if (!runs) {
+        return
+      }
+      this._clearWriteTimers()
+      for (const index of filledRuns) {
+        runs.delete(index)
+      }
+      if (runs.size === 0) {
+        this.runDecisions.delete(hunkId)
+      }
+      if (this.lastDecidedUnit?.hunkId === hunkId) {
+        this.lastDecidedUnit = null
+      }
+      this._setActiveHunk(hunkId)
+      this.suppressNextFocusScroll = false
+      await this._writeResolved()
     },
 
     /**
@@ -768,7 +820,7 @@ export const useReviewStore = defineStore('review', {
         viewOverrides: new Map(),
         spotlightHunkId: null,
         suppressNextFocusScroll: false,
-        lastDecidedHunkId: null,
+        lastDecidedUnit: null,
         activeHunkId: newHunks.find((hunk) => !carried.has(hunk.id))?.id ?? null,
         activeRunIndex: null,
         editingHunkId: null,
@@ -818,7 +870,7 @@ export const useReviewStore = defineStore('review', {
       this._setActiveHunk(null)
       this.spotlightHunkId = null
       // A bulk decision leaves no single change to single out.
-      this.lastDecidedHunkId = null
+      this.lastDecidedUnit = null
       await this._writeResolved()
       this._maybeFinalize()
     },
@@ -842,11 +894,14 @@ export const useReviewStore = defineStore('review', {
     /**
      * Fills every still-undecided decidable run of a hunk with `kind`,
      * leaving any run that already has its own accept/reject untouched.
-     * Returns false without touching anything for a hunk the overlay never
-     * correlated (no decidableRuns entry), so callers fall back to a plain
-     * whole-hunk decision — the pre-US-007 behavior.
+     * Returns the indexes it actually filled — the exact set a later Undo
+     * must revert, since decidable indexes a hand decision already claimed
+     * are not this call's to give back. Returns false without touching
+     * anything for a hunk the overlay never correlated (no decidableRuns
+     * entry), so callers fall back to a plain whole-hunk decision — the
+     * pre-US-007 behavior.
      */
-    _fillRemainingRuns(hunkId: string, kind: 'accept' | 'reject'): boolean {
+    _fillRemainingRuns(hunkId: string, kind: 'accept' | 'reject'): number[] | false {
       const decidable = this.decidableRuns.get(hunkId)
       if (!decidable || decidable.length === 0) {
         return false
@@ -856,12 +911,14 @@ export const useReviewStore = defineStore('review', {
         runs = new Map()
         this.runDecisions.set(hunkId, runs)
       }
+      const filled: number[] = []
       for (const index of decidable) {
         if (!runs.has(index)) {
           runs.set(index, kind)
+          filled.push(index)
         }
       }
-      return true
+      return filled
     },
 
     /**
@@ -870,23 +927,27 @@ export const useReviewStore = defineStore('review', {
      * own at their own call sites (the latter batches many hunks under one
      * write). An edit decision always replaces the hunk outright — bulk fill
      * only makes sense for accept/reject, which map onto per-run
-     * accept/reject directly.
+     * accept/reject directly. Returns the run indexes it bulk-filled, or
+     * null when it instead recorded a plain whole-hunk decision — decide()
+     * uses this to tell the two shapes of lastDecidedUnit apart.
      */
-    _applyHunkDecision(hunkId: string, decision: HunkDecision): void {
-      if (
-        (decision.kind === 'accept' || decision.kind === 'reject') &&
-        this._fillRemainingRuns(hunkId, decision.kind)
-      ) {
-        return
+    _applyHunkDecision(hunkId: string, decision: HunkDecision): number[] | null {
+      if (decision.kind === 'accept' || decision.kind === 'reject') {
+        const filled = this._fillRemainingRuns(hunkId, decision.kind)
+        if (filled !== false) {
+          return filled
+        }
       }
       this.decisions.set(hunkId, decision)
+      return null
     },
 
     /**
      * Bookkeeping shared by decide() and decideRun() for whichever one just
-     * brought a hunk to fully decided: point the cursor elsewhere, record it
-     * as the one "undo last change" would restore, and drop any UI state
-     * that assumed the hunk was still open.
+     * brought a hunk to fully decided: point the cursor elsewhere and drop
+     * any UI state that assumed the hunk was still open. lastDecidedUnit is
+     * not this method's concern — decide() and decideRun() set it themselves,
+     * since only they know whether the decision singles out one run or not.
      */
     _settleHunk(hunkId: string): void {
       if (this.editingHunkId === hunkId) {
@@ -896,7 +957,6 @@ export const useReviewStore = defineStore('review', {
         // The hunk melts into context on the next render — nothing left to lit.
         this.spotlightHunkId = null
       }
-      this.lastDecidedHunkId = hunkId
       if (this.activeHunkId === hunkId) {
         this._setActiveHunk(this.undecidedHunks[0]?.id ?? null)
       }

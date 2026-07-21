@@ -734,3 +734,144 @@ describe('useReviewStore decideActiveRunOrHunk (US-013)', () => {
     expect(invokeMock()).not.toHaveBeenCalled()
   })
 })
+
+describe('useReviewStore lastDecidedUnit (US-014)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    invokeMock().mockResolvedValue(undefined)
+  })
+
+  it('a single run decision records its runIndex, and reverting it via revertRun restores the pre-decision document', async() => {
+    vi.useFakeTimers()
+    try {
+      const store = useReviewStore()
+      store.enterReview(makeTab(), change(prop))
+      const hunkId = store.hunks[0].id
+
+      // Reject run 1 ('jumps'->'leaps'): a single run decision, so Undo must
+      // single out exactly this run rather than the whole hunk.
+      await store.decideRun(hunkId, 1, 'reject')
+      expect(store.lastDecidedUnit).toEqual({ hunkId, runIndex: 1 })
+      await vi.advanceTimersByTimeAsync(400)
+      expect(writtenMarkdown(invokeMock().mock.calls.length - 1)).toBe(
+        'the slow fox jumps over\ntwo\nthree'
+      )
+
+      // Undo, exactly as the review bar does when lastDecidedUnit carries a
+      // runIndex: revertRun, not undecide.
+      await store.revertRun(hunkId, 1)
+      await vi.advanceTimersByTimeAsync(400)
+
+      expect(store.runDecisions.get(hunkId)?.has(1)).toBeFalsy()
+      expect(store.lastDecidedUnit).toBeNull()
+      // Run 1 is undecided again, which resolves to proposed same as accept
+      // (FR-10) — back to the document as it stood before the reject.
+      expect(writtenMarkdown(invokeMock().mock.calls.length - 1)).toBe(prop)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a bulk action (acceptAll) clears lastDecidedUnit — nothing left to single out', async() => {
+    const store = useReviewStore()
+    vi.spyOn(useEditorStore(), 'loadChange').mockImplementation(() => {})
+    store.enterReview(makeTabMulti(), change(propMulti))
+    const [paragraphHunk] = store.hunks
+    store.setDecidableRuns(paragraphHunk.id, [0, 1, 2])
+
+    await store.decideRun(paragraphHunk.id, 0, 'accept')
+    expect(store.lastDecidedUnit).toEqual({ hunkId: paragraphHunk.id, runIndex: 0 })
+
+    await store.acceptAll()
+
+    expect(store.lastDecidedUnit).toBeNull()
+  })
+
+  it('a bulk action (rejectAll) clears lastDecidedUnit — nothing left to single out', async() => {
+    const store = useReviewStore()
+    vi.spyOn(useEditorStore(), 'loadChange').mockImplementation(() => {})
+    store.enterReview(makeTabMulti(), change(propMulti))
+    const [paragraphHunk] = store.hunks
+    store.setDecidableRuns(paragraphHunk.id, [0, 1, 2])
+
+    await store.decideRun(paragraphHunk.id, 0, 'reject')
+    expect(store.lastDecidedUnit).toEqual({ hunkId: paragraphHunk.id, runIndex: 0 })
+
+    await store.rejectAll()
+
+    expect(store.lastDecidedUnit).toBeNull()
+  })
+
+  it('a hunk-level decide that bulk-fills correlated runs stays undoable, and undo reverts exactly the runs the fill set', async() => {
+    const store = useReviewStore()
+    vi.spyOn(useEditorStore(), 'loadChange').mockImplementation(() => {})
+    // Two hunks (paragraphHunk + the unrelated lineHunk) so completing
+    // paragraphHunk here does not finalize the whole review out from under
+    // this test — lineHunk is left undecided on purpose.
+    store.enterReview(makeTabMulti(), change(propMulti))
+    const [paragraphHunk] = store.hunks
+    store.setDecidableRuns(paragraphHunk.id, [0, 1, 2])
+
+    await store.decideRun(paragraphHunk.id, 0, 'accept')
+    expect(store.lastDecidedUnit).toEqual({ hunkId: paragraphHunk.id, runIndex: 0 })
+
+    // "Keep all" on the card: this is one action on one paragraph, even
+    // though it resolves via _fillRemainingRuns rather than a plain
+    // whole-hunk decision — unlike acceptAll/rejectAll (which spans many
+    // hunks at once), it must stay undoable.
+    await store.decide(paragraphHunk.id, { kind: 'accept' })
+    expect(store.lastDecidedUnit).toEqual({ hunkId: paragraphHunk.id, filledRuns: [1, 2] })
+    expect(store.isHunkDecided(paragraphHunk.id)).toBe(true)
+
+    // Undo puts back exactly runs 1 and 2 — the ones the fill actually set —
+    // leaving run 0's earlier hand decision untouched.
+    await store.revertFilledRuns(paragraphHunk.id, [1, 2])
+
+    const runs = store.runDecisions.get(paragraphHunk.id)
+    expect(runs?.get(0)).toBe('accept')
+    expect(runs?.has(1)).toBe(false)
+    expect(runs?.has(2)).toBe(false)
+    expect(store.isHunkDecided(paragraphHunk.id)).toBe(false)
+    expect(store.lastDecidedUnit).toBeNull()
+  })
+
+  it('undo after a bulk-fill decide preserves a run the user had already decided by hand', async() => {
+    const store = useReviewStore()
+    vi.spyOn(useEditorStore(), 'loadChange').mockImplementation(() => {})
+    store.enterReview(makeTabMulti(), change(propMulti))
+    const [paragraphHunk] = store.hunks
+    store.setDecidableRuns(paragraphHunk.id, [0, 1, 2])
+
+    // Hand-reject run 1 ('jumps'->'leaps') before bulk-accepting the rest.
+    await store.decideRun(paragraphHunk.id, 1, 'reject')
+
+    // "Keep all": bulk-fills runs 0 and 2 as accept — run 1 already has its
+    // own decision, which _fillRemainingRuns must skip rather than overwrite.
+    await store.decide(paragraphHunk.id, { kind: 'accept' })
+    expect(store.lastDecidedUnit).toEqual({ hunkId: paragraphHunk.id, filledRuns: [0, 2] })
+
+    await store.revertFilledRuns(paragraphHunk.id, [0, 2])
+
+    // Run 1's hand decision survives the undo untouched — a different kind
+    // ('reject') than the bulk fill used ('accept'), so a bug that clobbered
+    // it back to 'accept' would show up here.
+    expect(store.runDecisions.get(paragraphHunk.id)?.get(1)).toBe('reject')
+    expect(store.isHunkDecided(paragraphHunk.id)).toBe(false)
+    expect(store.lastDecidedUnit).toBeNull()
+  })
+
+  it('a whole-hunk decide with no run correlation still records the hunk, unlike a bulk fill', async() => {
+    const store = useReviewStore()
+    vi.spyOn(useEditorStore(), 'loadChange').mockImplementation(() => {})
+    store.enterReview(makeTabMulti(), change(propMulti))
+    const [paragraphHunk, lineHunk] = store.hunks
+    // lineHunk is never correlated (no setDecidableRuns call), so its decide()
+    // takes the plain whole-hunk path, not _fillRemainingRuns.
+
+    await store.decide(lineHunk.id, { kind: 'accept' })
+
+    expect(store.lastDecidedUnit).toEqual({ hunkId: lineHunk.id })
+    expect(paragraphHunk).toBeDefined()
+  })
+})

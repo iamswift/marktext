@@ -61,11 +61,17 @@ test.describe('review margin cards', () => {
     expect(cardCells).toBe(docCells)
   })
 
-  test('the document column holds no buttons', async() => {
-    // The single strongest statement of the variant-6 thesis: every action for
-    // a change lives on its card, never over the prose.
-    await expect(page.locator('.doc-cell button')).toHaveCount(0)
+  test('the document column holds no hunk-level or bulk controls', async() => {
+    // Variant 6's actual thesis: the margin card owns every hunk-level/bulk
+    // action (Accept/Reject/toggle-view) — never the prose column. It does
+    // NOT forbid buttons in the document column outright: US-008 added a
+    // per-change Keep/Undo/Edit popover there on purpose, so any button found
+    // in a .doc-cell must belong to that popover, not to a bulk control.
     await expect(page.locator('.review-hunk-controls')).toHaveCount(0)
+    const docCellButtons = await page.locator('.doc-cell button').all()
+    for (const button of docCellButtons) {
+      await expect(button.locator('xpath=ancestor::*[contains(@class, "review-edit-popover")]')).toHaveCount(1)
+    }
   })
 
   test('each card names its change and summarizes the edit', async() => {

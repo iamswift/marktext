@@ -58,11 +58,11 @@ describe('review store undecide', () => {
 
   it('remembers the hunk most recently decided', async() => {
     const store = seed()
-    expect(store.lastDecidedHunkId).toBeNull()
+    expect(store.lastDecidedUnit).toBeNull()
     await store.decide('h1', { kind: 'accept' })
-    expect(store.lastDecidedHunkId).toBe('h1')
+    expect(store.lastDecidedUnit).toEqual({ hunkId: 'h1' })
     await store.decide('h0', { kind: 'reject' })
-    expect(store.lastDecidedHunkId).toBe('h0')
+    expect(store.lastDecidedUnit).toEqual({ hunkId: 'h0' })
   })
 
   it('restores a decided hunk to undecided and rewrites the file', async() => {
@@ -82,7 +82,7 @@ describe('review store undecide', () => {
     const store = seed()
     await store.decide('h1', { kind: 'accept' })
     await store.undecide('h1')
-    expect(store.lastDecidedHunkId).toBeNull()
+    expect(store.lastDecidedUnit).toBeNull()
   })
 
   it('focuses the restored hunk so the next keystroke acts on it', async() => {
@@ -106,13 +106,13 @@ describe('review store undecide', () => {
     const store = seed()
     await store.decide('h1', { kind: 'accept' })
     await store.acceptAll()
-    expect(store.lastDecidedHunkId).toBeNull()
+    expect(store.lastDecidedUnit).toBeNull()
   })
 
   it('forgets the last decision when the review ends', async() => {
     const store = seed()
     await store.decide('h1', { kind: 'accept' })
     store.exitReview()
-    expect(store.lastDecidedHunkId).toBeNull()
+    expect(store.lastDecidedUnit).toBeNull()
   })
 })
