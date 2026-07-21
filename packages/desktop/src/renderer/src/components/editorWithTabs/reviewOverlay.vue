@@ -226,7 +226,16 @@ const renderedSegments = computed<RenderedSegments>(() => {
     undo: t('review.undoChange'),
     edit: t('review.editParagraph'),
     kept: t('review.changeKept'),
-    undone: t('review.changeUndone')
+    undone: t('review.changeUndone'),
+    // US-013: names a still-pending run for a screen reader. A pure
+    // insertion/deletion has no text on the other side, so those get their
+    // own phrasing rather than a "replace X with (nothing)" that reads oddly.
+    describeChange: (oldText: string, newText: string): string => {
+      if (oldText && newText) {
+        return t('review.runChangeReplace', { old: oldText, new: newText })
+      }
+      return newText ? t('review.runChangeInsert', { new: newText }) : t('review.runChangeDelete', { old: oldText })
+    }
   }
 
   const renderedSegmentList = segments.map((segment): RenderedSegment => {
@@ -492,6 +501,27 @@ const onEditFocus = (event: FocusEvent): void => {
   }
 }
 
+/**
+ * Bridges the store's run cursor (activeHunkId/activeRunIndex — plain state,
+ * not DOM focus) back to real focus after Tab/Shift+Tab moves it. Falls back
+ * to the overlay container when the cursor lands with no run to point at (a
+ * hunk with no decidable runs, or none at all), so the next Tab still starts
+ * from inside the overlay instead of wherever focus happened to be left.
+ */
+const focusActiveRun = (): void => {
+  const { activeHunkId, activeRunIndex } = reviewStore
+  if (activeHunkId !== null && activeRunIndex !== null) {
+    const el = overlayRef.value?.querySelector<HTMLElement>(
+      `[data-hunk-id="${activeHunkId}"][data-run-index="${activeRunIndex}"]`
+    )
+    if (el) {
+      el.focus()
+      return
+    }
+  }
+  overlayRef.value?.focus()
+}
+
 // Delegated handler for a popover's Keep/Undo/Edit buttons — plain <button>
 // elements inside the v-html fragment, identified by the data attributes
 // wrapDecidableRuns/buildPopover stamped on them.
@@ -630,6 +660,36 @@ const onKeydown = (event: KeyboardEvent): void => {
     target.querySelector<HTMLButtonElement>('.review-edit-action')?.focus()
     return
   }
+  // Tab/Shift+Tab (US-013): intercepted only while a run already holds real
+  // DOM focus. Everywhere else (the overlay container, a plain part, a
+  // card's own buttons) Tab is left to the browser's native order — that is
+  // what lets a user tab out of the overlay entirely and guarantees they can
+  // never end up trapped. On a run, native order would otherwise dive into
+  // that run's own popover buttons next; intercepting skips past them to the
+  // next/previous decidable run instead, handing off to the adjacent hunk at
+  // either end (see reviewStore._moveRunCursor).
+  if (
+    key === 'Tab' &&
+    target instanceof HTMLElement &&
+    (target.classList.contains('review-edit') || target.classList.contains('review-edit-settled'))
+  ) {
+    event.preventDefault()
+    const { hunkId } = target.dataset
+    const runIndex = Number(target.dataset.runIndex)
+    if (hunkId && !Number.isNaN(runIndex)) {
+      // Native focus (a preceding plain Tab, or a mouse click) may have
+      // landed somewhere the store's cursor doesn't know about yet — sync it
+      // first so the move below steps from where focus actually is.
+      reviewStore.syncRunCursor(hunkId, runIndex)
+    }
+    if (event.shiftKey) {
+      reviewStore.focusPrevRun()
+    } else {
+      reviewStore.focusNextRun()
+    }
+    nextTick(focusActiveRun)
+    return
+  }
   if (key === 'j' || (altKey && key === 'ArrowDown')) {
     event.preventDefault()
     reviewStore.focusNext()
@@ -638,10 +698,10 @@ const onKeydown = (event: KeyboardEvent): void => {
     reviewStore.focusPrev()
   } else if ((key === 'a' || key === 'A') && reviewStore.activeHunkId) {
     event.preventDefault()
-    reviewStore.decide(reviewStore.activeHunkId, { kind: 'accept' }).catch(console.error)
+    reviewStore.decideActiveRunOrHunk('accept').catch(console.error)
   } else if ((key === 'r' || key === 'R') && reviewStore.activeHunkId) {
     event.preventDefault()
-    reviewStore.decide(reviewStore.activeHunkId, { kind: 'reject' }).catch(console.error)
+    reviewStore.decideActiveRunOrHunk('reject').catch(console.error)
   } else if ((key === 'e' || key === 'E') && reviewStore.activeHunkId) {
     event.preventDefault()
     reviewStore.beginEdit(reviewStore.activeHunkId)
@@ -851,6 +911,17 @@ const onKeydown = (event: KeyboardEvent): void => {
   position: relative;
   border-radius: 3px;
   cursor: pointer;
+}
+
+/* US-013: the Tab cursor's own ring, distinct from .review-region.active's
+   (which marks the whole hunk). The global `:focus { outline: none }` reset
+   (assets/styles/index.css) would otherwise swallow this — the extra
+   specificity here from nesting under .review-document wins over it. Shared
+   between the pending and settled wrapper, both real Tab stops. */
+.review-document :deep(.review-edit:focus),
+.review-document :deep(.review-edit-settled:focus) {
+  outline: 2px solid var(--diffActiveOutline, var(--themeColor));
+  outline-offset: 2px;
 }
 
 .review-document :deep(.review-edit:hover del.review-word-del),

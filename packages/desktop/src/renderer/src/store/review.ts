@@ -107,6 +107,14 @@ interface ReviewState {
    */
   lastDecidedHunkId: string | null
   activeHunkId: string | null
+  /**
+   * US-013's Tab/Shift+Tab cursor: which of activeHunkId's decidableRuns
+   * indexes is under keyboard focus, or null when no run is focused (a/r then
+   * fall back to whole-hunk behavior — see decideActiveRunOrHunk). Reset by
+   * _setActiveHunk wherever activeHunkId itself changes, so it can never
+   * outlive the hunk it points into.
+   */
+  activeRunIndex: number | null
   editingHunkId: string | null
   diskMeta: ReviewChangeData | null
   writeState: ReviewWriteState
@@ -141,6 +149,7 @@ const initialState = (): ReviewState => ({
   suppressNextFocusScroll: false,
   lastDecidedHunkId: null,
   activeHunkId: null,
+  activeRunIndex: null,
   editingHunkId: null,
   diskMeta: null,
   writeState: 'idle',
@@ -277,6 +286,7 @@ export const useReviewStore = defineStore('review', {
         suppressNextFocusScroll: false,
         lastDecidedHunkId: null,
         activeHunkId: hunks[0].id,
+        activeRunIndex: null,
         editingHunkId: null,
         diskMeta: change.data,
         writeState: 'idle',
@@ -311,7 +321,7 @@ export const useReviewStore = defineStore('review', {
       this.spotlightHunkId = hunkId
       if (hunkId && !this.decisions.has(hunkId) && this.activeHunkId !== hunkId) {
         this.suppressNextFocusScroll = true
-        this.activeHunkId = hunkId
+        this._setActiveHunk(hunkId)
       }
     },
 
@@ -337,7 +347,7 @@ export const useReviewStore = defineStore('review', {
         this.lastDecidedHunkId = null
       }
       // Put the cursor on what just came back so a/r/e act on it.
-      this.activeHunkId = hunkId
+      this._setActiveHunk(hunkId)
       this.suppressNextFocusScroll = false
       await this._writeResolved()
     },
@@ -523,7 +533,7 @@ export const useReviewStore = defineStore('review', {
     _focusBy(direction: 1 | -1): void {
       const { undecidedHunks, activeHunkId } = this
       if (undecidedHunks.length === 0) {
-        this.activeHunkId = null
+        this._setActiveHunk(null)
         return
       }
       const currentIndex = undecidedHunks.findIndex((hunk) => hunk.id === activeHunkId)
@@ -533,7 +543,84 @@ export const useReviewStore = defineStore('review', {
             ? 0
             : undecidedHunks.length - 1
           : (currentIndex + direction + undecidedHunks.length) % undecidedHunks.length
-      this.activeHunkId = undecidedHunks[nextIndex].id
+      this._setActiveHunk(undecidedHunks[nextIndex].id)
+    },
+
+    /**
+     * Every place that reassigns activeHunkId routes through here so
+     * activeRunIndex (US-013's Tab cursor) can never point at a run in a
+     * hunk that is no longer focused — it always resets alongside its owner,
+     * whether the hunk actually changed or (e.g. a single-hunk review
+     * wrapping to itself) stayed the same.
+     */
+    _setActiveHunk(hunkId: string | null): void {
+      this.activeHunkId = hunkId
+      this.activeRunIndex = null
+    },
+
+    /**
+     * Moves the Tab cursor forward/backward through the active hunk's
+     * decidable runs, in the order the overlay reported them to
+     * setDecidableRuns. Stepping past either end — or a hunk with no
+     * decidable runs of its own — hands off to the next/previous hunk via
+     * _focusBy rather than trapping the cursor, and immediately enters that
+     * hunk's first (forward) or last (backward) run when it has one, so Tab
+     * keeps flowing continuously across the boundary instead of dropping
+     * back to a bare hunk-level focus every time.
+     */
+    _moveRunCursor(direction: 1 | -1): void {
+      if (!this.activeHunkId) {
+        return
+      }
+      const runs = this.decidableRuns.get(this.activeHunkId) ?? []
+      const currentPos = this.activeRunIndex === null ? -1 : runs.indexOf(this.activeRunIndex)
+      const nextPos = currentPos + direction
+      if (runs.length > 0 && nextPos >= 0 && nextPos < runs.length) {
+        this.activeRunIndex = runs[nextPos]
+        return
+      }
+
+      this._focusBy(direction)
+      const handoffRuns = this.activeHunkId ? (this.decidableRuns.get(this.activeHunkId) ?? []) : []
+      if (handoffRuns.length > 0) {
+        this.activeRunIndex = direction > 0 ? handoffRuns[0] : handoffRuns[handoffRuns.length - 1]
+      }
+    },
+
+    focusNextRun(): void {
+      this._moveRunCursor(1)
+    },
+
+    focusPrevRun(): void {
+      this._moveRunCursor(-1)
+    },
+
+    /**
+     * Reconciles the cursor with wherever native DOM focus actually landed
+     * (a plain Tab before any run had been focused yet, or a mouse click on
+     * a run) before Tab/Shift+Tab asks it to move — otherwise the cursor
+     * could silently lag behind real focus and step from the wrong place.
+     */
+    syncRunCursor(hunkId: string, runIndex: number): void {
+      this.activeHunkId = hunkId
+      this.activeRunIndex = runIndex
+    },
+
+    /**
+     * What the 'a'/'r' shortcuts resolve to: the run under the Tab cursor
+     * when one is focused (US-013), otherwise the whole active hunk — the
+     * behavior that predates this story, left unchanged when no run is
+     * focused.
+     */
+    async decideActiveRunOrHunk(kind: 'accept' | 'reject'): Promise<void> {
+      if (!this.active || !this.activeHunkId) {
+        return
+      }
+      if (this.activeRunIndex !== null) {
+        await this.decideRun(this.activeHunkId, this.activeRunIndex, kind)
+      } else {
+        await this.decide(this.activeHunkId, { kind })
+      }
     },
 
     /**
@@ -683,6 +770,7 @@ export const useReviewStore = defineStore('review', {
         suppressNextFocusScroll: false,
         lastDecidedHunkId: null,
         activeHunkId: newHunks.find((hunk) => !carried.has(hunk.id))?.id ?? null,
+        activeRunIndex: null,
         editingHunkId: null,
         diskMeta: change.data,
         writeState: 'idle',
@@ -727,7 +815,7 @@ export const useReviewStore = defineStore('review', {
         this._applyHunkDecision(hunk.id, decision)
       }
       this.editingHunkId = null
-      this.activeHunkId = null
+      this._setActiveHunk(null)
       this.spotlightHunkId = null
       // A bulk decision leaves no single change to single out.
       this.lastDecidedHunkId = null
@@ -810,7 +898,7 @@ export const useReviewStore = defineStore('review', {
       }
       this.lastDecidedHunkId = hunkId
       if (this.activeHunkId === hunkId) {
-        this.activeHunkId = this.undecidedHunks[0]?.id ?? null
+        this._setActiveHunk(this.undecidedHunks[0]?.id ?? null)
       }
     },
 

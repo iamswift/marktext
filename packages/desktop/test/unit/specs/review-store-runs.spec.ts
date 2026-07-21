@@ -532,3 +532,205 @@ describe('useReviewStore syntaxOnlyRunCount (US-010)', () => {
     expect(store.syntaxOnlyRuns.size).toBe(0)
   })
 })
+
+describe('useReviewStore run cursor (US-013)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    invokeMock().mockResolvedValue(undefined)
+  })
+
+  it('is null right after enterReview', () => {
+    const store = useReviewStore()
+    store.enterReview(makeTab3(), change(prop3))
+    expect(store.activeRunIndex).toBeNull()
+  })
+
+  it('focusNextRun/focusPrevRun advance within one hunk\'s decidable runs', () => {
+    const store = useReviewStore()
+    store.enterReview(makeTab3(), change(prop3))
+    const hunkId = store.hunks[0].id
+    store.setDecidableRuns(hunkId, [0, 1, 2])
+
+    store.focusNextRun()
+    expect(store.activeRunIndex).toBe(0)
+    store.focusNextRun()
+    expect(store.activeRunIndex).toBe(1)
+    store.focusNextRun()
+    expect(store.activeRunIndex).toBe(2)
+
+    store.focusPrevRun()
+    expect(store.activeRunIndex).toBe(1)
+  })
+
+  it('stepping past the last run hands off to the next hunk, entering its first run', () => {
+    const store = useReviewStore()
+    store.enterReview(makeTabMulti(), change(propMulti))
+    const [paragraphHunk, lineHunk] = store.hunks
+    store.setDecidableRuns(paragraphHunk.id, [0, 1, 2])
+    // The sibling hunk is whole-hunk only — no per-run stops of its own.
+    store.setDecidableRuns(lineHunk.id, [])
+
+    store.focusNextRun()
+    store.focusNextRun()
+    store.focusNextRun()
+    expect(store.activeHunkId).toBe(paragraphHunk.id)
+    expect(store.activeRunIndex).toBe(2)
+
+    store.focusNextRun()
+
+    expect(store.activeHunkId).toBe(lineHunk.id)
+    // lineHunk has no decidable runs to enter, so the cursor sits at
+    // hunk-level focus only.
+    expect(store.activeRunIndex).toBeNull()
+  })
+
+  it('stepping before the first run hands off to the previous hunk, entering its last run', () => {
+    const store = useReviewStore()
+    store.enterReview(makeTabMulti(), change(propMulti))
+    const [paragraphHunk, lineHunk] = store.hunks
+    store.setDecidableRuns(paragraphHunk.id, [0, 1, 2])
+    store.setDecidableRuns(lineHunk.id, [])
+
+    store.focusNext() // hunk-level nav onto lineHunk, no run ever focused
+    expect(store.activeHunkId).toBe(lineHunk.id)
+
+    store.focusPrevRun()
+
+    expect(store.activeHunkId).toBe(paragraphHunk.id)
+    expect(store.activeRunIndex).toBe(2)
+  })
+
+  it('resets whenever the active hunk changes via focusNext/focusPrev', () => {
+    const store = useReviewStore()
+    store.enterReview(makeTab3(), change(prop3))
+    const hunkId = store.hunks[0].id
+    store.setDecidableRuns(hunkId, [0, 1, 2])
+
+    store.focusNextRun()
+    expect(store.activeRunIndex).toBe(0)
+
+    // Only one hunk exists, so this wraps back onto itself — the cursor must
+    // still reset, since hunk-level nav always exits run-focus mode.
+    store.focusNext()
+
+    expect(store.activeRunIndex).toBeNull()
+  })
+
+  it('resets when setSpotlight moves the active hunk', () => {
+    const store = useReviewStore()
+    store.enterReview(makeTabMulti(), change(propMulti))
+    const [paragraphHunk, lineHunk] = store.hunks
+    store.setDecidableRuns(paragraphHunk.id, [0, 1, 2])
+    store.focusNextRun()
+    expect(store.activeRunIndex).toBe(0)
+
+    store.setSpotlight(lineHunk.id)
+
+    expect(store.activeHunkId).toBe(lineHunk.id)
+    expect(store.activeRunIndex).toBeNull()
+  })
+
+  it('resets when undecide brings a hunk back up for review', async() => {
+    const store = useReviewStore()
+    vi.spyOn(useEditorStore(), 'loadChange').mockImplementation(() => {})
+    store.enterReview(makeTabMulti(), change(propMulti))
+    const [paragraphHunk, lineHunk] = store.hunks
+    store.setDecidableRuns(paragraphHunk.id, [0, 1, 2])
+    await store.decide(lineHunk.id, { kind: 'accept' })
+
+    store.focusNextRun()
+    expect(store.activeRunIndex).toBe(0)
+
+    await store.undecide(lineHunk.id)
+
+    expect(store.activeHunkId).toBe(lineHunk.id)
+    expect(store.activeRunIndex).toBeNull()
+  })
+
+  it('resets on exitReview', () => {
+    const store = useReviewStore()
+    store.enterReview(makeTab3(), change(prop3))
+    const hunkId = store.hunks[0].id
+    store.setDecidableRuns(hunkId, [0, 1, 2])
+    store.focusNextRun()
+    expect(store.activeRunIndex).not.toBeNull()
+
+    store.exitReview()
+
+    expect(store.activeRunIndex).toBeNull()
+  })
+
+  it('resets on restartAgainstNewDisk', async() => {
+    const store = useReviewStore()
+    store.enterReview(makeTab(), change(prop))
+    const hunkId = store.hunks[0].id
+    store.setDecidableRuns(hunkId, [0, 1])
+    store.focusNextRun()
+    expect(store.activeRunIndex).not.toBeNull()
+
+    // A second external write that still differs from the frozen baseline,
+    // so the restart re-diffs rather than exiting review outright.
+    const prop2 = 'the slow fox leaps over\ntwo\nTHREE'
+    await store.restartAgainstNewDisk(change(prop2))
+
+    expect(store.active).toBe(true)
+    expect(store.activeRunIndex).toBeNull()
+  })
+
+  it('syncRunCursor points the cursor at wherever native focus actually landed', () => {
+    const store = useReviewStore()
+    store.enterReview(makeTabMulti(), change(propMulti))
+    const [, lineHunk] = store.hunks
+
+    store.syncRunCursor(lineHunk.id, 0)
+
+    expect(store.activeHunkId).toBe(lineHunk.id)
+    expect(store.activeRunIndex).toBe(0)
+  })
+})
+
+describe('useReviewStore decideActiveRunOrHunk (US-013)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    invokeMock().mockResolvedValue(undefined)
+  })
+
+  it('decides the focused run when the Tab cursor has entered one', async() => {
+    const store = useReviewStore()
+    store.enterReview(makeTab3(), change(prop3))
+    const hunkId = store.hunks[0].id
+    store.setDecidableRuns(hunkId, [0, 1, 2])
+    store.focusNextRun() // -> run 0
+    store.focusNextRun() // -> run 1
+
+    await store.decideActiveRunOrHunk('accept')
+
+    expect(store.runDecisions.get(hunkId)?.get(1)).toBe('accept')
+    expect(store.decisions.has(hunkId)).toBe(false)
+  })
+
+  it('decides the whole hunk when no run is focused — unchanged pre-US-013 behavior', async() => {
+    const store = useReviewStore()
+    store.enterReview(makeTabMulti(), change(propMulti))
+    const [paragraphHunk, lineHunk] = store.hunks
+    store.setDecidableRuns(paragraphHunk.id, [0, 1, 2])
+    store.focusNext() // hunk-level nav onto lineHunk; no run ever focused
+    expect(store.activeHunkId).toBe(lineHunk.id)
+    expect(store.activeRunIndex).toBeNull()
+
+    await store.decideActiveRunOrHunk('reject')
+
+    expect(store.decisions.get(lineHunk.id)).toEqual({ kind: 'reject' })
+    expect(store.active).toBe(true)
+  })
+
+  it('is a no-op when no hunk is active', async() => {
+    const store = useReviewStore()
+
+    await store.decideActiveRunOrHunk('accept')
+
+    expect(invokeMock()).not.toHaveBeenCalled()
+  })
+})

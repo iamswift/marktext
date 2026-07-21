@@ -14,7 +14,14 @@ const el = (html: string): HTMLElement => {
   return root
 }
 
-const labels = { keep: 'Keep', undo: 'Undo', edit: 'Edit', kept: 'Kept', undone: 'Undone' }
+const labels = {
+  keep: 'Keep',
+  undo: 'Undo',
+  edit: 'Edit',
+  kept: 'Kept',
+  undone: 'Undone',
+  describeChange: (oldText: string, newText: string) => `Change: ${oldText} -> ${newText}`
+}
 
 let seq = 0
 const hunk = (baselineLines: string[], proposedLines: string[]): DiffHunk => ({

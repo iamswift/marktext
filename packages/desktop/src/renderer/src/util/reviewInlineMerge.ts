@@ -153,6 +153,13 @@ export interface RunActionLabels {
   kept: string
   /** aria-label/title for a run settled as rejected (US-009). */
   undone: string
+  /**
+   * aria-label for a still-pending run (US-013) — states the old and new
+   * text so a keyboard/screen-reader user can identify the change without
+   * relying on the struck-through/underlined visual marks alone. Left empty
+   * to a caller for whichever side a pure insertion/deletion has none of.
+   */
+  describeChange: (oldText: string, newText: string) => string
 }
 
 /**
@@ -372,6 +379,9 @@ const wrapOneRun = (
     wrapper.appendChild(extracted)
     range.insertNode(wrapper)
     wrapper.appendChild(buildPopover(doc, hunkId, sourceRun.index, labels))
+    // Names the change itself (US-013) — separate from the popover buttons'
+    // own titles, which name the ACTIONS, not what they'd act on.
+    wrapper.setAttribute('aria-label', labels.describeChange(renderedRun.delText, renderedRun.addText))
   }
 }
 
