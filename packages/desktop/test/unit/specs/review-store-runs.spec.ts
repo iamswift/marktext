@@ -308,3 +308,70 @@ describe('useReviewStore hunk decided-ness and bulk fill (US-007)', () => {
     expect(invokeMock()).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('useReviewStore syntaxOnlyRunCount (US-010)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    invokeMock().mockResolvedValue(undefined)
+  })
+
+  it('is empty right after enterReview', () => {
+    const store = useReviewStore()
+    store.enterReview(makeTab3(), change(prop3))
+    expect(store.syntaxOnlyRuns.size).toBe(0)
+    expect(store.syntaxOnlyRunCount(store.hunks[0].id)).toBe(0)
+  })
+
+  it('reflects the indexes the latest correlation reported as syntax-only', () => {
+    const store = useReviewStore()
+    store.enterReview(makeTab3(), change(prop3))
+    const hunkId = store.hunks[0].id
+
+    store.seedSyntaxOnlyRuns(hunkId, [0, 2])
+
+    expect(store.syntaxOnlyRunCount(hunkId)).toBe(2)
+  })
+
+  it('replaces rather than accumulates when a later render reports a different set', () => {
+    const store = useReviewStore()
+    store.enterReview(makeTab3(), change(prop3))
+    const hunkId = store.hunks[0].id
+
+    store.seedSyntaxOnlyRuns(hunkId, [0, 2])
+    expect(store.syntaxOnlyRunCount(hunkId)).toBe(2)
+
+    // The overlay re-correlates every render; a hunk that no longer has any
+    // syntax-only runs must drop back down, not keep the stale count.
+    store.seedSyntaxOnlyRuns(hunkId, [1])
+    expect(store.syntaxOnlyRunCount(hunkId)).toBe(1)
+  })
+
+  it('resets on exitReview', () => {
+    const store = useReviewStore()
+    store.enterReview(makeTab3(), change(prop3))
+    const hunkId = store.hunks[0].id
+    store.seedSyntaxOnlyRuns(hunkId, [0])
+    expect(store.syntaxOnlyRunCount(hunkId)).toBe(1)
+
+    store.exitReview()
+
+    expect(store.syntaxOnlyRuns.size).toBe(0)
+  })
+
+  it('resets on restartAgainstNewDisk', async() => {
+    const store = useReviewStore()
+    store.enterReview(makeTab(), change(prop))
+    const hunkId = store.hunks[0].id
+    store.seedSyntaxOnlyRuns(hunkId, [0])
+    expect(store.syntaxOnlyRunCount(hunkId)).toBe(1)
+
+    // A second external write that still differs from the frozen baseline,
+    // so the restart re-diffs rather than exiting review outright.
+    const prop2 = 'the slow fox leaps over\ntwo\nTHREE'
+    await store.restartAgainstNewDisk(change(prop2))
+
+    expect(store.active).toBe(true)
+    expect(store.syntaxOnlyRuns.size).toBe(0)
+  })
+})

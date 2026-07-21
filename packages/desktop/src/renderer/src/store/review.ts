@@ -69,6 +69,18 @@ interface ReviewState {
    */
   decidableRuns: Map<string, number[]>
   /**
+   * Which of a hunk's edit-run indexes the latest render's correlation
+   * classified as syntax-only (RunCorrelation.syntaxOnly) — formatting-only
+   * edits seeded as accepted with no decision UI of their own. Kept apart
+   * from runDecisions (which also records these as 'accept') because a card
+   * needs the raw count to disclose "+ N formatting changes" even though
+   * seedSyntaxOnlyRuns and a manual accept both land in the same map and are
+   * indistinguishable there. Replaced wholesale on each call, same as
+   * decidableRuns — the overlay reports its full current correlation every
+   * render. Session-scoped for the same reason as decidableRuns.
+   */
+  syntaxOnlyRuns: Map<string, number[]>
+  /**
    * Per-hunk hand overrides of the classified view. Session-scoped: hunk ids
    * are re-keyed whenever the review restarts, so a stale override would
    * otherwise land on an unrelated hunk.
@@ -106,6 +118,7 @@ const initialState = (): ReviewState => ({
   decisions: new Map(),
   runDecisions: new Map(),
   decidableRuns: new Map(),
+  syntaxOnlyRuns: new Map(),
   viewOverrides: new Map(),
   spotlightHunkId: null,
   suppressNextFocusScroll: false,
@@ -188,6 +201,15 @@ export const useReviewStore = defineStore('review', {
         const decided = this.runDecisions.get(hunkId)
         return computeEditRuns(hunk).filter((run) => !decided?.has(run.index)).length
       }
+    },
+    /**
+     * How many of a hunk's runs the latest correlation classified as
+     * syntax-only formatting changes (seedSyntaxOnlyRuns) — the count a card
+     * discloses as "+ N formatting changes" so an edit nobody was asked to
+     * decide isn't silently folded into "Keep all".
+     */
+    syntaxOnlyRunCount() {
+      return (hunkId: string): number => this.syntaxOnlyRuns.get(hunkId)?.length ?? 0
     }
   },
 
@@ -225,6 +247,7 @@ export const useReviewStore = defineStore('review', {
         decisions: new Map(),
         runDecisions: new Map(),
         decidableRuns: new Map(),
+        syntaxOnlyRuns: new Map(),
         viewOverrides: new Map(),
         spotlightHunkId: null,
         suppressNextFocusScroll: false,
@@ -383,6 +406,7 @@ export const useReviewStore = defineStore('review', {
      * proposed, same as 'accept'), so it never writes.
      */
     seedSyntaxOnlyRuns(hunkId: string, runIndexes: number[]): void {
+      this.syntaxOnlyRuns.set(hunkId, runIndexes)
       let runs = this.runDecisions.get(hunkId)
       for (const index of runIndexes) {
         if (runs?.has(index)) {
@@ -579,6 +603,7 @@ export const useReviewStore = defineStore('review', {
         // the overlay re-correlates and re-registers on the next render.
         runDecisions: new Map(),
         decidableRuns: new Map(),
+        syntaxOnlyRuns: new Map(),
         // Decisions are carried across by contentKey, but views and the
         // spotlight are not: the ids they were keyed to no longer refer to the
         // same hunks.

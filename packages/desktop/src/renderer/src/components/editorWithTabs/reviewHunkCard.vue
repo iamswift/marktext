@@ -50,14 +50,14 @@
           :title="t('review.acceptHint')"
           @click.stop="accept"
         >
-          ✓ {{ t('review.accept') }}
+          ✓ {{ showBulkActions ? t('review.keepAllCount', { count: pendingRuns }) : t('review.accept') }}
         </button>
         <button
           class="act undo reject"
           :title="t('review.rejectHint')"
           @click.stop="reject"
         >
-          ↺ {{ t('review.reject') }}
+          ↺ {{ showBulkActions ? t('review.undoAll') : t('review.reject') }}
         </button>
         <button
           class="act ghost edit"
@@ -66,6 +66,13 @@
         >
           ✎
         </button>
+      </div>
+
+      <div
+        v-if="formattingCount > 0"
+        class="formatting-disclosure"
+      >
+        + {{ t('review.formattingChanges', { count: formattingCount }) }}
       </div>
 
       <div
@@ -112,6 +119,22 @@ const delta = computed(() => (hunk.value ? summarizeHunk(hunk.value) : null))
 // A one-sided hunk's merged view is a single struck-through/added block, not
 // a paragraph carrying both sides — "In paragraph" would misdescribe it.
 const oneSided = computed(() => hunk.value !== undefined && hunk.value.type !== 'replace')
+
+// How many of the hunk's edit runs the user can still act on. Deliberately
+// NOT the card's "N words fixed" heading (labelMetrics in summarize.ts
+// overcounts whitespace-only parts) — this is the count Keep all/Undo all
+// must show and act on, since it is what _fillRemainingRuns will actually
+// touch.
+const pendingRuns = computed(() => reviewStore.pendingRunCount(props.hunkId))
+
+// Bulk labels only make sense once the overlay has correlated this hunk's
+// runs to individual decisions (decidableRuns non-empty) — otherwise Keep/
+// Undo already decide the whole hunk in one shot and "all (N)" would imply a
+// granularity the text column never offered.
+const correlated = computed(() => (reviewStore.decidableRuns.get(props.hunkId)?.length ?? 0) > 0)
+const showBulkActions = computed(() => correlated.value && pendingRuns.value >= 2)
+
+const formattingCount = computed(() => reviewStore.syntaxOnlyRunCount(props.hunkId))
 
 // Singular and plural are separate keys: vue-i18n plural parsing is disabled
 // in this app's config, so the "a | b" form would not compile.
@@ -263,6 +286,12 @@ const toggleView = (): void => {
 .sug-actions {
   display: flex;
   gap: 6px;
+}
+
+.formatting-disclosure {
+  margin-top: 6px;
+  font-size: 11.5px;
+  color: var(--reviewCardKindColor, var(--editorColor60, rgba(128, 128, 128, 0.75)));
 }
 
 .sug-actions.view-row {
