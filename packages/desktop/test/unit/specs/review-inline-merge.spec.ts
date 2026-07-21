@@ -6,6 +6,7 @@ import {
   isSingleParagraph,
   wrapDecidableRuns
 } from '@/util/reviewInlineMerge'
+import type { EditRun } from 'common/diff/editRuns'
 
 const el = (html: string): HTMLElement => {
   const root = document.createElement('div')
@@ -13,7 +14,7 @@ const el = (html: string): HTMLElement => {
   return root
 }
 
-const labels = { keep: 'Keep', undo: 'Undo', edit: 'Edit' }
+const labels = { keep: 'Keep', undo: 'Undo', edit: 'Edit', kept: 'Kept', undone: 'Undone' }
 
 let seq = 0
 const hunk = (baselineLines: string[], proposedLines: string[]): DiffHunk => ({
@@ -202,6 +203,116 @@ describe('wrapDecidableRuns', () => {
     )
     expect(wrapped).toEqual([])
     expect(addedEl.querySelector('.review-edit')).toBeNull()
+  })
+})
+
+describe('wrapDecidableRuns — settled runs (US-009)', () => {
+  // Asserts the correlation rather than handing back a nullable, so a fixture
+  // that stops correlating fails here by name instead of somewhere downstream.
+  const setup = (): {
+    decidable: EditRun[]
+    addedEl: HTMLElement
+    hunkId: string
+    deletedText: string
+    addedText: string
+  } => {
+    const h = hunk(['the priting industry'], ['the printing industry'])
+    const deletedEl = el('<p>the priting industry</p>')
+    const addedEl = el('<p>the printing industry</p>')
+    const correlation = correlateRuns(h, deletedEl, addedEl)
+    expect(correlation).not.toBeNull()
+    const deletedText = deletedEl.textContent ?? ''
+    const addedText = addedEl.textContent ?? ''
+    applyInlineMerge(deletedText, addedEl)
+    return {
+      decidable: correlation?.decidable ?? [],
+      addedEl,
+      hunkId: h.id,
+      deletedText,
+      addedText
+    }
+  }
+
+  it('collapses an accepted run to addText only, with no del/add marks or popover left', () => {
+    const { decidable, addedEl, hunkId, deletedText, addedText } = setup()
+    const runDecisions = new Map<number, 'accept' | 'reject'>([[0, 'accept']])
+    const wrapped = wrapDecidableRuns(
+      hunkId,
+      deletedText,
+      addedText,
+      addedEl,
+      decidable,
+      labels,
+      runDecisions
+    )
+
+    expect(wrapped).toEqual([0])
+    const wrapper = addedEl.querySelector('.review-edit')
+    expect(wrapper?.classList.contains('review-edit-settled')).toBe(true)
+    expect(wrapper?.textContent).toBe('printing')
+    expect(wrapper?.querySelector('del.review-word-del')).toBeNull()
+    expect(wrapper?.querySelector('.review-word-add')).toBeNull()
+    expect(wrapper?.querySelector('.review-edit-popover')).toBeNull()
+  })
+
+  it('collapses a rejected run to delText only, with no del/add marks or popover left', () => {
+    const { decidable, addedEl, hunkId, deletedText, addedText } = setup()
+    const runDecisions = new Map<number, 'accept' | 'reject'>([[0, 'reject']])
+    wrapDecidableRuns(
+      hunkId,
+      deletedText,
+      addedText,
+      addedEl,
+      decidable,
+      labels,
+      runDecisions
+    )
+
+    const wrapper = addedEl.querySelector('.review-edit')
+    expect(wrapper?.classList.contains('review-edit-settled')).toBe(true)
+    expect(wrapper?.textContent).toBe('priting')
+    expect(wrapper?.querySelector('del.review-word-del')).toBeNull()
+    expect(wrapper?.querySelector('.review-word-add')).toBeNull()
+    expect(wrapper?.querySelector('.review-edit-popover')).toBeNull()
+  })
+
+  it('keeps data-run-key, tabindex, and an aria-label naming the decision', () => {
+    const { decidable, addedEl, hunkId, deletedText, addedText } = setup()
+    const runDecisions = new Map<number, 'accept' | 'reject'>([[0, 'accept']])
+    wrapDecidableRuns(
+      hunkId,
+      deletedText,
+      addedText,
+      addedEl,
+      decidable,
+      labels,
+      runDecisions
+    )
+
+    const wrapper = addedEl.querySelector('.review-edit')
+    expect(wrapper?.getAttribute('data-run-key')).toBe(decidable[0].id)
+    expect(wrapper?.getAttribute('tabindex')).toBe('0')
+    expect(wrapper?.getAttribute('aria-label')).toBe(labels.kept)
+  })
+
+  it('leaves a pending run unchanged from US-008 when the run carries no decision', () => {
+    const { decidable, addedEl, hunkId, deletedText, addedText } = setup()
+    const wrapped = wrapDecidableRuns(
+      hunkId,
+      deletedText,
+      addedText,
+      addedEl,
+      decidable,
+      labels,
+      new Map()
+    )
+
+    expect(wrapped).toEqual([0])
+    const wrapper = addedEl.querySelector('.review-edit')
+    expect(wrapper?.classList.contains('review-edit-settled')).toBe(false)
+    expect(wrapper?.querySelector('del.review-word-del')?.textContent).toBe('priting')
+    expect(wrapper?.querySelector('.review-word-add')?.textContent).toBe('printing')
+    expect(wrapper?.querySelectorAll('.review-edit-action')).toHaveLength(3)
   })
 })
 

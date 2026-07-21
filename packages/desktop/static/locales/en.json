@@ -953,6 +953,8 @@
     "keepChange": "Keep",
     "undoChange": "Undo",
     "editParagraph": "Edit",
+    "changeKept": "Change kept — click to review again",
+    "changeUndone": "Change undone — click to review again",
     "capBefore": "Before — your version",
     "capAfter": "After — suggested",
     "emptyBefore": "(nothing — this text is new)",

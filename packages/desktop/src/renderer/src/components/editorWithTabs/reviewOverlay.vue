@@ -224,7 +224,9 @@ const renderedSegments = computed<RenderedSegments>(() => {
   const runActionLabels = {
     keep: t('review.keepChange'),
     undo: t('review.undoChange'),
-    edit: t('review.editParagraph')
+    edit: t('review.editParagraph'),
+    kept: t('review.changeKept'),
+    undone: t('review.changeUndone')
   }
 
   const renderedSegmentList = segments.map((segment): RenderedSegment => {
@@ -281,7 +283,8 @@ const renderedSegments = computed<RenderedSegments>(() => {
               addedText,
               addedEl,
               correlation.decidable,
-              runActionLabels
+              runActionLabels,
+              reviewStore.runDecisions.get(hunkId)
             )
             : []
 
@@ -494,20 +497,30 @@ const onEditFocus = (event: FocusEvent): void => {
 // wrapDecidableRuns/buildPopover stamped on them.
 const onEditAction = (event: MouseEvent): void => {
   const button = (event.target as HTMLElement | null)?.closest<HTMLElement>('.review-edit-action')
-  if (!button) {
+  if (button) {
+    const { hunkId, reviewAct } = button.dataset
+    const runIndex = Number(button.dataset.runIndex)
+    if (!hunkId || Number.isNaN(runIndex)) {
+      return
+    }
+    if (reviewAct === 'keep') {
+      reviewStore.decideRun(hunkId, runIndex, 'accept').catch(console.error)
+    } else if (reviewAct === 'undo') {
+      reviewStore.decideRun(hunkId, runIndex, 'reject').catch(console.error)
+    } else if (reviewAct === 'edit') {
+      reviewStore.beginEdit(hunkId)
+    }
     return
   }
-  const { hunkId, reviewAct } = button.dataset
-  const runIndex = Number(button.dataset.runIndex)
-  if (!hunkId || Number.isNaN(runIndex)) {
-    return
-  }
-  if (reviewAct === 'keep') {
-    reviewStore.decideRun(hunkId, runIndex, 'accept').catch(console.error)
-  } else if (reviewAct === 'undo') {
-    reviewStore.decideRun(hunkId, runIndex, 'reject').catch(console.error)
-  } else if (reviewAct === 'edit') {
-    reviewStore.beginEdit(hunkId)
+
+  // A settled run (US-009) has no popover — the whole wrapper is the
+  // affordance, and clicking it puts the run back up for review.
+  const settled = editWrapperFrom(event)
+  if (settled?.classList.contains('review-edit-settled') && settled.dataset.hunkId) {
+    const runIndex = Number(settled.dataset.runIndex)
+    if (!Number.isNaN(runIndex)) {
+      reviewStore.revertRun(settled.dataset.hunkId, runIndex).catch(console.error)
+    }
   }
 }
 
@@ -591,6 +604,22 @@ const onKeydown = (event: KeyboardEvent): void => {
   }
 
   const { key, altKey, target } = event
+  // Enter/Space on a settled run (US-009) has no popover to open — the
+  // wrapper is the whole affordance, so activating it reverts the run
+  // directly, the keyboard equivalent of the click handled in onEditAction.
+  if (
+    (key === 'Enter' || key === ' ') &&
+    target instanceof HTMLElement &&
+    target.classList.contains('review-edit-settled')
+  ) {
+    event.preventDefault()
+    const { hunkId } = target.dataset
+    const runIndex = Number(target.dataset.runIndex)
+    if (hunkId && !Number.isNaN(runIndex)) {
+      reviewStore.revertRun(hunkId, runIndex).catch(console.error)
+    }
+    return
+  }
   // Enter on the wrapper itself (not a popover button, which handles its own
   // activation) reveals the popover and moves focus into it — the wrapper's
   // :focus-within already shows it, but a keyboard user tabbing to the
@@ -886,6 +915,24 @@ const onKeydown = (event: KeyboardEvent): void => {
 
 .review-document :deep(.review-edit-action.edit:hover) {
   background: var(--editorColor10, rgba(128, 128, 128, 0.12));
+}
+
+/* US-009: a settled run carries no tint, strikethrough, or border — it reads
+   as ordinary prose (color/weight inherited) until the reviewer hovers or
+   tabs to it, at which point a subtle underline is the only signal that it
+   is still reversible. Its accessible name (aria-label, set in
+   reviewInlineMerge) and the native `title` tooltip are what state the
+   actual decision. */
+.review-document :deep(.review-edit-settled) {
+  border-radius: 2px;
+}
+
+.review-document :deep(.review-edit-settled:hover),
+.review-document :deep(.review-edit-settled:focus-visible) {
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-decoration-color: var(--editorColor60, rgba(128, 128, 128, 0.6));
+  text-underline-offset: 2px;
 }
 
 /* Keep rendered fragments legible with editor-like typography. */

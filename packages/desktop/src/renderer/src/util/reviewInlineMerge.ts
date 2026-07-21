@@ -140,11 +140,19 @@ export const correlateRuns = (
   return { decidable: contentRuns, syntaxOnly }
 }
 
-/** Labels for a decidable run's popover; supplied by the caller (i18n lives in the Vue layer) so this module can stay Pinia/i18n-free and unit-testable in isolation. */
+/**
+ * Labels for a decidable run's popover and for a settled run's accessible
+ * name/tooltip; supplied by the caller (i18n lives in the Vue layer) so this
+ * module can stay Pinia/i18n-free and unit-testable in isolation.
+ */
 export interface RunActionLabels {
   keep: string
   undo: string
   edit: string
+  /** aria-label/title for a run settled as accepted (US-009). */
+  kept: string
+  /** aria-label/title for a run settled as rejected (US-009). */
+  undone: string
 }
 
 /**
@@ -258,6 +266,17 @@ const buildPopover = (
  * partially-spanned ancestors as needed); insertNode() puts the collapsed
  * range's boundary — and so the wrapper — back where the extracted content
  * used to be.
+ *
+ * `decision` is undefined for a still-pending run, which renders exactly as
+ * before (both marks, a Keep/Undo/Edit popover). When a decision is present
+ * (US-009), the extracted del+add markup is discarded outright rather than
+ * hidden — the wrapper is refilled with a single plain-text node holding
+ * only the winning side (`renderedRun.addText` for 'accept',
+ * `renderedRun.delText` for 'reject'), so a screen reader's textContent read
+ * and a sighted skim both see settled prose, never the losing side or its
+ * tint.
+ * The popover is dropped too: a settled run's only affordance is the
+ * wrapper itself, which the overlay's click handler routes to revertRun.
  */
 const wrapOneRun = (
   addedRoot: HTMLElement,
@@ -265,7 +284,8 @@ const wrapOneRun = (
   hunkId: string,
   sourceRun: EditRun,
   renderedRun: EditRun,
-  labels: RunActionLabels
+  labels: RunActionLabels,
+  decision?: 'accept' | 'reject'
 ): void => {
   const doc = addedRoot.ownerDocument
   const hasDeletion = renderedRun.delText !== ''
@@ -302,14 +322,33 @@ const wrapOneRun = (
   }
 
   const wrapper = doc.createElement('span')
-  wrapper.className = 'review-edit'
   wrapper.tabIndex = 0
   wrapper.dataset.runKey = sourceRun.id
   wrapper.dataset.hunkId = hunkId
   wrapper.dataset.runIndex = String(sourceRun.index)
-  wrapper.appendChild(range.extractContents())
-  range.insertNode(wrapper)
-  wrapper.appendChild(buildPopover(doc, hunkId, sourceRun.index, labels))
+
+  const extracted = range.extractContents()
+
+  if (decision) {
+    wrapper.className = 'review-edit review-edit-settled'
+    wrapper.dataset.reviewDecision = decision
+    // role="button": the wrapper itself is the only affordance here (no
+    // popover), so it must read as actionable, not as a plain text run.
+    wrapper.setAttribute('role', 'button')
+    const settledText = decision === 'accept' ? renderedRun.addText : renderedRun.delText
+    if (settledText !== '') {
+      wrapper.appendChild(doc.createTextNode(settledText))
+    }
+    const label = decision === 'accept' ? labels.kept : labels.undone
+    wrapper.setAttribute('aria-label', label)
+    wrapper.title = label
+    range.insertNode(wrapper)
+  } else {
+    wrapper.className = 'review-edit'
+    wrapper.appendChild(extracted)
+    range.insertNode(wrapper)
+    wrapper.appendChild(buildPopover(doc, hunkId, sourceRun.index, labels))
+  }
 }
 
 /**
@@ -327,6 +366,11 @@ const wrapOneRun = (
  * applyInlineMerge has since mutated addedRoot's text — `deletedText`/
  * `addedText` must be the strings captured BEFORE that call for the offsets
  * to still land correctly.
+ *
+ * `runDecisions` (US-009) is keyed by the SOURCE run's index — the same
+ * coordinate space as `decidable`'s entries and reviewStore.runDecisions —
+ * so a settled run collapses regardless of how its rendered counterpart's
+ * offsets shifted this render.
  */
 export const wrapDecidableRuns = (
   hunkId: string,
@@ -334,7 +378,8 @@ export const wrapDecidableRuns = (
   addedText: string,
   addedRoot: HTMLElement,
   decidable: readonly EditRun[],
-  labels: RunActionLabels
+  labels: RunActionLabels,
+  runDecisions?: ReadonlyMap<number, 'accept' | 'reject'>
 ): number[] => {
   if (decidable.length === 0 || !deletedText || !addedText) {
     return []
@@ -351,7 +396,15 @@ export const wrapDecidableRuns = (
       return
     }
     try {
-      wrapOneRun(addedRoot, entries, hunkId, run, renderedRuns[renderedIndex], labels)
+      wrapOneRun(
+        addedRoot,
+        entries,
+        hunkId,
+        run,
+        renderedRuns[renderedIndex],
+        labels,
+        runDecisions?.get(run.index)
+      )
       wrapped.push(run.index)
     } catch {
       // Best-effort — see wrapOneRun's doc comment. The run stays part of
