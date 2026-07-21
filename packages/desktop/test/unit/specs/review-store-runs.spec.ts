@@ -24,6 +24,7 @@ vi.mock('@/services/notification', () => ({
 }))
 vi.mock('@/store/bufferedState', () => ({ debouncedSendBufferedState: vi.fn() }))
 
+import { useEditorStore } from '@/store/editor'
 import { useReviewStore } from '@/store/review'
 import type { IFileState } from '@shared/types/files'
 
@@ -40,6 +41,37 @@ const makeTab = (): IFileState =>
     filename: 'a.md',
     pathname: '/x/a.md',
     markdown: base,
+    isSaved: true
+  }) as unknown as IFileState
+
+// A single replace hunk with three independent word-level edit runs:
+// run 0 'quick'->'slow', run 1 'jumps'->'leaps', run 2 'lazy'->'sleepy'
+// (verified against diffWordsWithSpace directly — 'fox' and 'over the'
+// between them carry real words, so the three edits stay separate runs).
+const base3 = 'the quick fox jumps over the lazy dog\ntwo\nthree'
+const prop3 = 'the slow fox leaps over the sleepy dog\ntwo\nthree'
+
+const makeTab3 = (): IFileState =>
+  ({
+    id: 'tab-1',
+    filename: 'a.md',
+    pathname: '/x/a.md',
+    markdown: base3,
+    isSaved: true
+  }) as unknown as IFileState
+
+// The same three-run paragraph plus an unrelated second hunk on line 3, so a
+// hunk can finish resolving through its runs while a sibling hunk is still
+// undecided (h0 = paragraph, h1 = 'three' -> 'THREE').
+const baseMulti = 'the quick fox jumps over the lazy dog\ntwo\nthree'
+const propMulti = 'the slow fox leaps over the sleepy dog\ntwo\nTHREE'
+
+const makeTabMulti = (): IFileState =>
+  ({
+    id: 'tab-1',
+    filename: 'a.md',
+    pathname: '/x/a.md',
+    markdown: baseMulti,
     isSaved: true
   }) as unknown as IFileState
 
@@ -141,5 +173,138 @@ describe('useReviewStore run decisions (US-006)', () => {
     expect(invokeMock().mock.calls[0][0]).toBe('mt::review-write-file')
     expect(invokeMock().mock.calls[0][1]).toBe('/x/a.md')
     expect(writtenMarkdown(0)).toBe('the slow fox jumps over\ntwo\nthree')
+  })
+})
+
+describe('useReviewStore hunk decided-ness and bulk fill (US-007)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    invokeMock().mockResolvedValue(undefined)
+  })
+
+  it('hunk-level accept after two individual Keeps is byte-identical to keeping every run', async() => {
+    const storeA = useReviewStore()
+    vi.spyOn(useEditorStore(), 'loadChange').mockImplementation(() => {})
+    storeA.enterReview(makeTab3(), change(prop3))
+    const hunkIdA = storeA.hunks[0].id
+    storeA.setDecidableRuns(hunkIdA, [0, 1, 2])
+
+    await storeA.decideRun(hunkIdA, 0, 'accept')
+    await storeA.decideRun(hunkIdA, 1, 'accept')
+    // Only run 2 remains — the whole-hunk accept must bulk-fill it, not
+    // clobber the two runs already decided individually.
+    await storeA.decide(hunkIdA, { kind: 'accept' })
+    const docA = writtenMarkdown(invokeMock().mock.calls.length - 1)
+
+    invokeMock().mockClear()
+    setActivePinia(createPinia())
+    const storeB = useReviewStore()
+    vi.spyOn(useEditorStore(), 'loadChange').mockImplementation(() => {})
+    storeB.enterReview(makeTab3(), change(prop3))
+    const hunkIdB = storeB.hunks[0].id
+    storeB.setDecidableRuns(hunkIdB, [0, 1, 2])
+
+    await storeB.decideRun(hunkIdB, 0, 'accept')
+    await storeB.decideRun(hunkIdB, 1, 'accept')
+    await storeB.decideRun(hunkIdB, 2, 'accept')
+    const docB = writtenMarkdown(invokeMock().mock.calls.length - 1)
+
+    expect(docA).toBe(docB)
+    expect(docA).toBe(prop3)
+  })
+
+  it('hunk-level accept after two individual Rejects preserves those rejects', async() => {
+    const store = useReviewStore()
+    vi.spyOn(useEditorStore(), 'loadChange').mockImplementation(() => {})
+    store.enterReview(makeTab3(), change(prop3))
+    const hunkId = store.hunks[0].id
+    store.setDecidableRuns(hunkId, [0, 1, 2])
+
+    await store.decideRun(hunkId, 0, 'reject')
+    await store.decideRun(hunkId, 1, 'reject')
+    // The bulk accept must only fill run 2 — runs 0 and 1 stay rejected,
+    // so this must NOT equal the plain whole-hunk-accept document (prop3).
+    await store.decide(hunkId, { kind: 'accept' })
+
+    const doc = writtenMarkdown(invokeMock().mock.calls.length - 1)
+    expect(doc).toBe('the quick fox jumps over the sleepy dog\ntwo\nthree')
+    expect(doc).not.toBe(prop3)
+  })
+
+  it('a hunk with all decidable runs decided counts as decided in remainingCount', async() => {
+    const store = useReviewStore()
+    vi.spyOn(useEditorStore(), 'loadChange').mockImplementation(() => {})
+    store.enterReview(makeTabMulti(), change(propMulti))
+    expect(store.hunks.length).toBe(2)
+    const [paragraphHunk, lineHunk] = store.hunks
+    store.setDecidableRuns(paragraphHunk.id, [0, 1, 2])
+
+    expect(store.remainingCount).toBe(2)
+
+    await store.decideRun(paragraphHunk.id, 0, 'accept')
+    await store.decideRun(paragraphHunk.id, 1, 'accept')
+    await store.decideRun(paragraphHunk.id, 2, 'accept')
+
+    expect(store.remainingCount).toBe(1)
+    expect(store.active).toBe(true)
+    expect(store.undecidedHunks.map((h) => h.id)).toEqual([lineHunk.id])
+  })
+
+  it('remainingCount stays in hunks — deciding one run of a 3-run hunk does not change it', async() => {
+    const store = useReviewStore()
+    store.enterReview(makeTab3(), change(prop3))
+    const hunkId = store.hunks[0].id
+    store.setDecidableRuns(hunkId, [0, 1, 2])
+
+    expect(store.remainingCount).toBe(1)
+    await store.decideRun(hunkId, 0, 'accept')
+    expect(store.remainingCount).toBe(1)
+  })
+
+  it('finalize fires exactly once, on the last decidable run of the last hunk', async() => {
+    const store = useReviewStore()
+    const loadChangeSpy = vi
+      .spyOn(useEditorStore(), 'loadChange')
+      .mockImplementation(() => {})
+    store.enterReview(makeTabMulti(), change(propMulti))
+    const [paragraphHunk, lineHunk] = store.hunks
+    store.setDecidableRuns(paragraphHunk.id, [0, 1, 2])
+
+    await store.decide(lineHunk.id, { kind: 'accept' })
+    expect(loadChangeSpy).not.toHaveBeenCalled()
+
+    await store.decideRun(paragraphHunk.id, 0, 'accept')
+    await store.decideRun(paragraphHunk.id, 1, 'accept')
+    expect(loadChangeSpy).not.toHaveBeenCalled()
+
+    await store.decideRun(paragraphHunk.id, 2, 'accept')
+
+    expect(loadChangeSpy).toHaveBeenCalledTimes(1)
+    expect(store.active).toBe(false)
+  })
+
+  it('seedSyntaxOnlyRuns is idempotent and never overwrites a real decision', async() => {
+    const store = useReviewStore()
+    store.enterReview(makeTab3(), change(prop3))
+    const hunkId = store.hunks[0].id
+
+    // Run 2 already carries a manual decision — the overlay must not clobber
+    // it even if a later render's correlation puts index 2 in syntaxOnly.
+    await store.decideRun(hunkId, 2, 'reject')
+    expect(invokeMock()).toHaveBeenCalledTimes(1)
+
+    store.seedSyntaxOnlyRuns(hunkId, [2])
+    expect(store.runDecisions.get(hunkId)?.get(2)).toBe('reject')
+
+    store.seedSyntaxOnlyRuns(hunkId, [0])
+    expect(store.runDecisions.get(hunkId)?.get(0)).toBe('accept')
+
+    // Re-seeding the same indexes is a no-op: no entries change, and no
+    // write-back is triggered by a seed call alone.
+    store.seedSyntaxOnlyRuns(hunkId, [0, 2])
+    expect(store.runDecisions.get(hunkId)?.get(0)).toBe('accept')
+    expect(store.runDecisions.get(hunkId)?.get(2)).toBe('reject')
+    expect(invokeMock()).toHaveBeenCalledTimes(1)
   })
 })

@@ -58,6 +58,17 @@ interface ReviewState {
    */
   runDecisions: Map<string, Map<number, 'accept' | 'reject'>>
   /**
+   * Which of a hunk's edit-run indexes the overlay was able to correlate to
+   * a per-change decision (RunCorrelation.decidable from reviewInlineMerge).
+   * The store cannot run that correlation itself — it needs rendered DOM —
+   * so the overlay reports the result here via setDecidableRuns as it
+   * renders. A hunk absent from this map, or mapped to [], was never
+   * correlated: decide() and hunk decided-ness fall back to the pre-US-007
+   * binary, hunk-level behavior for it. Session-scoped for the same reason
+   * as runDecisions.
+   */
+  decidableRuns: Map<string, number[]>
+  /**
    * Per-hunk hand overrides of the classified view. Session-scoped: hunk ids
    * are re-keyed whenever the review restarts, so a stale override would
    * otherwise land on an unrelated hunk.
@@ -94,6 +105,7 @@ const initialState = (): ReviewState => ({
   hunks: [],
   decisions: new Map(),
   runDecisions: new Map(),
+  decidableRuns: new Map(),
   viewOverrides: new Map(),
   spotlightHunkId: null,
   suppressNextFocusScroll: false,
@@ -109,10 +121,40 @@ export const useReviewStore = defineStore('review', {
   state: initialState,
 
   getters: {
-    undecidedHunks: (state): DiffHunk[] =>
-      state.hunks.filter((hunk) => !state.decisions.has(hunk.id)),
+    /**
+     * Hunks still open for review. A hunk counts as decided — and drops out
+     * of this list, `remainingCount`, and finalize's trigger — once it has a
+     * whole-hunk decision OR every one of its correlated decidable runs has
+     * one; see `isHunkDecided`. The unit stays hunks, not runs: the review
+     * bar must read as stable progress through paragraphs, not flicker with
+     * every individual Keep/Undo click inside one.
+     */
+    undecidedHunks(): DiffHunk[] {
+      return this.hunks.filter((hunk) => !this.isHunkDecided(hunk.id))
+    },
     remainingCount(): number {
       return this.undecidedHunks.length
+    },
+    /**
+     * A hunk is done when it has a whole-hunk decision, or — for a hunk the
+     * overlay correlated via setDecidableRuns — every one of its decidable
+     * run indexes has an entry in runDecisions. A hunk with no (or an empty)
+     * decidableRuns entry can only be decided the first way: without this
+     * guard, "every one of zero runs is decided" would vacuously mark an
+     * uncorrelated hunk decided the instant it appeared.
+     */
+    isHunkDecided() {
+      return (hunkId: string): boolean => {
+        if (this.decisions.has(hunkId)) {
+          return true
+        }
+        const decidable = this.decidableRuns.get(hunkId)
+        if (!decidable || decidable.length === 0) {
+          return false
+        }
+        const runs = this.runDecisions.get(hunkId)
+        return decidable.every((index) => runs?.has(index))
+      }
     },
     decidedCount(): number {
       return this.hunks.length - this.undecidedHunks.length
@@ -182,6 +224,7 @@ export const useReviewStore = defineStore('review', {
         hunks,
         decisions: new Map(),
         runDecisions: new Map(),
+        decidableRuns: new Map(),
         viewOverrides: new Map(),
         spotlightHunkId: null,
         suppressNextFocusScroll: false,
@@ -248,9 +291,17 @@ export const useReviewStore = defineStore('review', {
      * Records a decision and writes the resolved document. The decision is
      * kept even when the write fails (FR-16) — retryWrite re-attempts the
      * same resolution. Finalizes the review after the last decision lands.
+     *
+     * For an accept/reject on a hunk the overlay has correlated, this fills
+     * every still-undecided run rather than recording a whole-hunk decision
+     * — see `_applyHunkDecision`. That is what makes "Keep all" produce the
+     * same bytes as deciding every run by hand: a run already settled by
+     * decideRun (accept or reject) must survive a later bulk decide
+     * untouched, and a whole-hunk decision recorded here would instead win
+     * outright over those per-run decisions (see `_effectiveDecisions`).
      */
     async decide(hunkId: string, decision: HunkDecision): Promise<void> {
-      if (!this.active || this.decisions.has(hunkId)) {
+      if (!this.active || this.isHunkDecided(hunkId)) {
         return
       }
       const hunk = this.hunks.find((h) => h.id === hunkId)
@@ -258,18 +309,8 @@ export const useReviewStore = defineStore('review', {
         return
       }
 
-      this.decisions.set(hunkId, decision)
-      if (this.editingHunkId === hunkId) {
-        this.editingHunkId = null
-      }
-      if (this.spotlightHunkId === hunkId) {
-        // The hunk melts into context on the next render — nothing left to lit.
-        this.spotlightHunkId = null
-      }
-      this.lastDecidedHunkId = hunkId
-      if (this.activeHunkId === hunkId) {
-        this.activeHunkId = this.undecidedHunks[0]?.id ?? null
-      }
+      this._applyHunkDecision(hunkId, decision)
+      this._settleHunk(hunkId)
 
       await this._writeResolved()
       this._maybeFinalize()
@@ -277,13 +318,12 @@ export const useReviewStore = defineStore('review', {
 
     /**
      * Records one edit run's decision within a hunk that has no whole-hunk
-     * decision yet. Deliberately does not touch activeHunkId,
-     * lastDecidedHunkId, or finalize — rolling per-run decisions up into
-     * hunk decided-ness is US-007's job; this action only owns the run-level
-     * record and its write-back.
+     * decision yet. Once this fills the last of the hunk's correlated
+     * decidable runs, the hunk is fully decided — same settle + finalize
+     * treatment as a whole-hunk decide().
      */
     async decideRun(hunkId: string, runIndex: number, kind: 'accept' | 'reject'): Promise<void> {
-      if (!this.active || this.decisions.has(hunkId)) {
+      if (!this.active || this.isHunkDecided(hunkId)) {
         return
       }
       if (!this.hunks.some((h) => h.id === hunkId)) {
@@ -295,7 +335,13 @@ export const useReviewStore = defineStore('review', {
         this.runDecisions.set(hunkId, runs)
       }
       runs.set(runIndex, kind)
+
       await this._writeResolved()
+
+      if (this.isHunkDecided(hunkId)) {
+        this._settleHunk(hunkId)
+        this._maybeFinalize()
+      }
     },
 
     /** Puts one run back up for review, leaving its sibling runs' decisions intact. */
@@ -312,6 +358,42 @@ export const useReviewStore = defineStore('review', {
         this.runDecisions.delete(hunkId)
       }
       await this._writeResolved()
+    },
+
+    /**
+     * Registers which of a hunk's edit runs the overlay correlated to a
+     * per-change decision this render (RunCorrelation.decidable). Safe to
+     * call every render: a hunk the overlay never correlates simply never
+     * gets an entry, and decide()/isHunkDecided treat that exactly like
+     * before US-007 — one binary, hunk-level decision.
+     */
+    setDecidableRuns(hunkId: string, runIndexes: number[]): void {
+      this.decidableRuns.set(hunkId, runIndexes)
+    },
+
+    /**
+     * Seeds a hunk's syntax-only runs (RunCorrelation.syntaxOnly — markdown
+     * formatting changes with no decision UI of their own) as accepted, so
+     * `pendingRunCount` converges to zero once every decidable run is
+     * resolved instead of sitting stuck on a change nobody is ever asked to
+     * decide. Only fills indexes that carry no decision yet: the overlay may
+     * re-correlate on every render, and a run the user separately decided
+     * through decideRun must never be clobbered back to 'accept'. Never
+     * changes the resolved document (an unfilled run already resolves to
+     * proposed, same as 'accept'), so it never writes.
+     */
+    seedSyntaxOnlyRuns(hunkId: string, runIndexes: number[]): void {
+      let runs = this.runDecisions.get(hunkId)
+      for (const index of runIndexes) {
+        if (runs?.has(index)) {
+          continue
+        }
+        if (!runs) {
+          runs = new Map()
+          this.runDecisions.set(hunkId, runs)
+        }
+        runs.set(index, 'accept')
+      }
     },
 
     async acceptAll(): Promise<void> {
@@ -493,8 +575,10 @@ export const useReviewStore = defineStore('review', {
         // Unlike whole-hunk decisions, run decisions are NOT carried forward
         // by contentKey — a stale run index surviving a restart could land on
         // an unrelated edit in the re-diffed hunk, so the safer default is to
-        // make every run undecided again.
+        // make every run undecided again. decidableRuns resets alongside it:
+        // the overlay re-correlates and re-registers on the next render.
         runDecisions: new Map(),
+        decidableRuns: new Map(),
         // Decisions are carried across by contentKey, but views and the
         // spotlight are not: the ids they were keyed to no longer refer to the
         // same hunks.
@@ -536,8 +620,11 @@ export const useReviewStore = defineStore('review', {
       if (!this.active || this.remainingCount === 0) {
         return
       }
+      // Same per-hunk rule as decide(): a hunk with runs already decided by
+      // hand keeps them, rather than a bulk accept/reject overwriting them
+      // outright via a whole-hunk decision.
       for (const hunk of this.undecidedHunks) {
-        this.decisions.set(hunk.id, decision)
+        this._applyHunkDecision(hunk.id, decision)
       }
       this.editingHunkId = null
       this.activeHunkId = null
@@ -565,12 +652,75 @@ export const useReviewStore = defineStore('review', {
     },
 
     /**
+     * Fills every still-undecided decidable run of a hunk with `kind`,
+     * leaving any run that already has its own accept/reject untouched.
+     * Returns false without touching anything for a hunk the overlay never
+     * correlated (no decidableRuns entry), so callers fall back to a plain
+     * whole-hunk decision — the pre-US-007 behavior.
+     */
+    _fillRemainingRuns(hunkId: string, kind: 'accept' | 'reject'): boolean {
+      const decidable = this.decidableRuns.get(hunkId)
+      if (!decidable || decidable.length === 0) {
+        return false
+      }
+      let runs = this.runDecisions.get(hunkId)
+      if (!runs) {
+        runs = new Map()
+        this.runDecisions.set(hunkId, runs)
+      }
+      for (const index of decidable) {
+        if (!runs.has(index)) {
+          runs.set(index, kind)
+        }
+      }
+      return true
+    },
+
+    /**
+     * Applies a whole-hunk accept/reject/edit to one hunk, without the
+     * active/write/finalize bookkeeping decide() and _decideRemaining() each
+     * own at their own call sites (the latter batches many hunks under one
+     * write). An edit decision always replaces the hunk outright — bulk fill
+     * only makes sense for accept/reject, which map onto per-run
+     * accept/reject directly.
+     */
+    _applyHunkDecision(hunkId: string, decision: HunkDecision): void {
+      if (
+        (decision.kind === 'accept' || decision.kind === 'reject') &&
+        this._fillRemainingRuns(hunkId, decision.kind)
+      ) {
+        return
+      }
+      this.decisions.set(hunkId, decision)
+    },
+
+    /**
+     * Bookkeeping shared by decide() and decideRun() for whichever one just
+     * brought a hunk to fully decided: point the cursor elsewhere, record it
+     * as the one "undo last change" would restore, and drop any UI state
+     * that assumed the hunk was still open.
+     */
+    _settleHunk(hunkId: string): void {
+      if (this.editingHunkId === hunkId) {
+        this.editingHunkId = null
+      }
+      if (this.spotlightHunkId === hunkId) {
+        // The hunk melts into context on the next render — nothing left to lit.
+        this.spotlightHunkId = null
+      }
+      this.lastDecidedHunkId = hunkId
+      if (this.activeHunkId === hunkId) {
+        this.activeHunkId = this.undecidedHunks[0]?.id ?? null
+      }
+    },
+
+    /**
      * The one place runDecisions folds into the shape resolveDocument
      * expects, so write-back and finalize never have to duplicate this
-     * merge. A hunk with its own decision wins outright: decideRun already
-     * refuses to record once a hunk is decided, but a hunk can still pick up
-     * a whole-hunk decision (e.g. acceptAll) while pending runs linger from
-     * before, and those must not resurface as a stale 'runs' decision.
+     * merge. A hunk with its own decision wins outright: decide() only ever
+     * records one when the hunk has no correlated decidable runs (see
+     * _applyHunkDecision), so this can never discard a real per-run decision
+     * in favor of a stale whole-hunk one.
      */
     _effectiveDecisions(): Map<string, HunkDecision> {
       const merged = new Map(this.decisions)
