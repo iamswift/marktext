@@ -1,5 +1,6 @@
 import { normalizeText, type DiffHunk } from './index'
-import type { HunkDecision } from './resolve'
+import { resolveRuns, type HunkDecision } from './resolve'
+import { computeEditRuns } from './editRuns'
 
 export type AnnotatedLineKind = 'context' | 'del' | 'add'
 
@@ -182,13 +183,22 @@ export function annotateMerged(
     cursor = hunk.baselineStart + hunk.baselineLines.length
 
     const decision = decisions.get(hunk.id)
-    if (!decision) {
+    // A 'runs' hunk melts to context only once EVERY run carries a decision;
+    // until then it is still pending and stays expanded, so the overlay can
+    // decorate the individual runs inside it.
+    const pendingRuns =
+      decision?.kind === 'runs' &&
+      computeEditRuns(hunk).some((run) => !decision.runs.has(run.index))
+
+    if (!decision || pendingRuns) {
       for (const text of hunk.baselineLines) {
         out.push({ text, kind: 'del', hunkId: hunk.id })
       }
       for (const text of hunk.proposedLines) {
         out.push({ text, kind: 'add', hunkId: hunk.id })
       }
+    } else if (decision.kind === 'runs') {
+      pushContext(resolveRuns(hunk, decision.runs))
     } else if (decision.kind === 'accept') {
       pushContext(hunk.proposedLines)
     } else if (decision.kind === 'reject') {

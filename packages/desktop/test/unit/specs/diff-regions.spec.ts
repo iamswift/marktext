@@ -86,6 +86,37 @@ describe('annotateMerged', () => {
       { text: 'c', kind: 'context' }
     ])
   })
+
+  it('keeps a partly-decided runs hunk expanded so its runs stay decorable', () => {
+    // Two runs, one decided. The hunk is not settled, so it must still render
+    // as del/add — the overlay decorates the individual runs inside it.
+    const base = 'a\nthe priting industry is essentialy good\nc'
+    const prop = 'a\nthe printing industry is essentially good\nc'
+    const hunks = computeHunks(base, prop)
+    const partly = new Map<string, HunkDecision>([
+      ['h0', { kind: 'runs', runs: new Map([[0, 'accept']]) }]
+    ])
+    expect(annotateMerged(base, hunks, partly)).toEqual([
+      { text: 'a', kind: 'context' },
+      { text: 'the priting industry is essentialy good', kind: 'del', hunkId: 'h0' },
+      { text: 'the printing industry is essentially good', kind: 'add', hunkId: 'h0' },
+      { text: 'c', kind: 'context' }
+    ])
+  })
+
+  it('melts a fully-decided runs hunk into context at its resolved text', () => {
+    const base = 'a\nthe priting industry is essentialy good\nc'
+    const prop = 'a\nthe printing industry is essentially good\nc'
+    const hunks = computeHunks(base, prop)
+    const settled = new Map<string, HunkDecision>([
+      ['h0', { kind: 'runs', runs: new Map<number, 'accept' | 'reject'>([[0, 'accept'], [1, 'reject']]) }]
+    ])
+    expect(annotateMerged(base, hunks, settled)).toEqual([
+      { text: 'a', kind: 'context' },
+      { text: 'the printing industry is essentialy good', kind: 'context' },
+      { text: 'c', kind: 'context' }
+    ])
+  })
 })
 
 describe('computeRegions', () => {
