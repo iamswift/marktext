@@ -161,18 +161,166 @@ describe('useReviewStore run decisions (US-006)', () => {
   })
 
   it('a run decision writes through the existing chain with the run resolved', async() => {
+    // US-011: decideRun now debounces its write (~400ms) rather than writing
+    // synchronously, so the assertion has to advance past that window.
+    vi.useFakeTimers()
+    try {
+      const store = useReviewStore()
+      store.enterReview(makeTab(), change(prop))
+      const hunkId = store.hunks[0].id
+
+      // Reject run 1 ('jumps'->'leaps') only; run 0 ('quick'->'slow') has no
+      // decision yet, so FR-10 keeps it proposed.
+      await store.decideRun(hunkId, 1, 'reject')
+      expect(invokeMock()).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(400)
+
+      expect(invokeMock()).toHaveBeenCalledTimes(1)
+      expect(invokeMock().mock.calls[0][0]).toBe('mt::review-write-file')
+      expect(invokeMock().mock.calls[0][1]).toBe('/x/a.md')
+      expect(writtenMarkdown(0)).toBe('the slow fox jumps over\ntwo\nthree')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('useReviewStore debounced write coalescing (US-011)', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    vi.clearAllMocks()
+    invokeMock().mockResolvedValue(undefined)
+  })
+
+  it('five rapid run decisions inside the debounce window produce exactly one write', async() => {
+    vi.useFakeTimers()
+    try {
+      const store = useReviewStore()
+      store.enterReview(makeTabMulti(), change(propMulti))
+      const [paragraphHunk] = store.hunks
+      store.setDecidableRuns(paragraphHunk.id, [0, 1, 2])
+
+      // Five decisions touching the same run, none of them completing the
+      // hunk (run 2 stays undecided) or the review (the sibling line hunk
+      // stays undecided too) — every one must go through the debounced path.
+      await store.decideRun(paragraphHunk.id, 0, 'accept')
+      await store.decideRun(paragraphHunk.id, 1, 'accept')
+      await store.decideRun(paragraphHunk.id, 1, 'reject')
+      await store.revertRun(paragraphHunk.id, 1)
+      await store.decideRun(paragraphHunk.id, 1, 'accept')
+
+      expect(invokeMock()).not.toHaveBeenCalled()
+      await vi.advanceTimersByTimeAsync(400)
+
+      expect(invokeMock()).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('a max-wait timer forces a flush at the 2s mark despite continuous 300ms decisions', async() => {
+    vi.useFakeTimers()
+    try {
+      const store = useReviewStore()
+      store.enterReview(makeTabMulti(), change(propMulti))
+      const [paragraphHunk] = store.hunks
+      store.setDecidableRuns(paragraphHunk.id, [0, 1, 2])
+
+      let toggled = false
+      const click = async(): Promise<void> => {
+        if (toggled) {
+          await store.revertRun(paragraphHunk.id, 0)
+        } else {
+          await store.decideRun(paragraphHunk.id, 0, 'accept')
+        }
+        toggled = !toggled
+      }
+
+      // t=0: the first decision starts both the 400ms debounce and the
+      // 2000ms max-wait. Six more decisions every 300ms (t=300..1800) each
+      // reset only the debounce, so nothing should have flushed by t=1800.
+      await click()
+      for (let t = 300; t <= 1800; t += 300) {
+        await vi.advanceTimersByTimeAsync(300)
+        await click()
+      }
+      expect(invokeMock()).not.toHaveBeenCalled()
+
+      // Crossing the 2000ms mark fires the max-wait backstop even though the
+      // debounce window (last reset at t=1800) wouldn't elapse until t=2200.
+      await vi.advanceTimersByTimeAsync(300)
+      expect(invokeMock()).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('exiting review flushes a pending debounced run write before teardown', async() => {
     const store = useReviewStore()
     store.enterReview(makeTab(), change(prop))
     const hunkId = store.hunks[0].id
 
-    // Reject run 1 ('jumps'->'leaps') only; run 0 ('quick'->'slow') has no
-    // decision yet, so FR-10 keeps it proposed.
     await store.decideRun(hunkId, 1, 'reject')
+    expect(invokeMock()).not.toHaveBeenCalled()
+
+    store.exitReview()
+    // exitReview's flush is fire-and-forget (many of its own callers don't
+    // await it either), so let the already-queued write settle before
+    // asserting — its synchronous prefix ran inline before state was reset.
+    await new Promise((resolve) => setTimeout(resolve, 0))
 
     expect(invokeMock()).toHaveBeenCalledTimes(1)
-    expect(invokeMock().mock.calls[0][0]).toBe('mt::review-write-file')
-    expect(invokeMock().mock.calls[0][1]).toBe('/x/a.md')
     expect(writtenMarkdown(0)).toBe('the slow fox jumps over\ntwo\nthree')
+    expect(store.active).toBe(false)
+  })
+
+  it('a bulk action (acceptAll) flushes a pending run write instead of losing it', async() => {
+    const store = useReviewStore()
+    const loadChangeSpy = vi
+      .spyOn(useEditorStore(), 'loadChange')
+      .mockImplementation(() => {})
+    store.enterReview(makeTabMulti(), change(propMulti))
+    const [paragraphHunk] = store.hunks
+    store.setDecidableRuns(paragraphHunk.id, [0, 1, 2])
+
+    await store.decideRun(paragraphHunk.id, 0, 'reject')
+    expect(invokeMock()).not.toHaveBeenCalled()
+
+    await store.acceptAll()
+
+    // One write, not two: acceptAll cancels the pending debounce and its own
+    // write already reflects the earlier manual reject on run 0.
+    expect(invokeMock()).toHaveBeenCalledTimes(1)
+    expect(writtenMarkdown(0)).toBe('the quick fox leaps over the sleepy dog\ntwo\nTHREE')
+    expect(store.active).toBe(false)
+    expect(loadChangeSpy).toHaveBeenCalledTimes(1)
+  })
+
+  it('a failed write on the last run decision preserves it, and retryWrite recovers', async() => {
+    const store = useReviewStore()
+    const loadChangeSpy = vi
+      .spyOn(useEditorStore(), 'loadChange')
+      .mockImplementation(() => {})
+    store.enterReview(makeTab(), change(prop))
+    const hunkId = store.hunks[0].id
+    store.setDecidableRuns(hunkId, [0, 1])
+    invokeMock().mockRejectedValue(new Error('EBUSY: locked'))
+
+    await store.decideRun(hunkId, 0, 'accept')
+    // The last decidable run of the only hunk: finalize needs the write, so
+    // this attempts immediately instead of debouncing — and fails.
+    await store.decideRun(hunkId, 1, 'reject')
+
+    expect(store.writeState).toBe('error')
+    expect(store.runDecisions.get(hunkId)?.get(1)).toBe('reject')
+    expect(store.active).toBe(true)
+    expect(loadChangeSpy).not.toHaveBeenCalled()
+
+    invokeMock().mockResolvedValue(undefined)
+    await store.retryWrite()
+
+    expect(store.active).toBe(false)
+    expect(loadChangeSpy).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -285,27 +433,36 @@ describe('useReviewStore hunk decided-ness and bulk fill (US-007)', () => {
   })
 
   it('seedSyntaxOnlyRuns is idempotent and never overwrites a real decision', async() => {
-    const store = useReviewStore()
-    store.enterReview(makeTab3(), change(prop3))
-    const hunkId = store.hunks[0].id
+    // decideRun's write is debounced (US-011); this hunk never registers
+    // decidableRuns, so it never finalizes either — advance past the
+    // debounce window to observe the write.
+    vi.useFakeTimers()
+    try {
+      const store = useReviewStore()
+      store.enterReview(makeTab3(), change(prop3))
+      const hunkId = store.hunks[0].id
 
-    // Run 2 already carries a manual decision — the overlay must not clobber
-    // it even if a later render's correlation puts index 2 in syntaxOnly.
-    await store.decideRun(hunkId, 2, 'reject')
-    expect(invokeMock()).toHaveBeenCalledTimes(1)
+      // Run 2 already carries a manual decision — the overlay must not clobber
+      // it even if a later render's correlation puts index 2 in syntaxOnly.
+      await store.decideRun(hunkId, 2, 'reject')
+      await vi.advanceTimersByTimeAsync(400)
+      expect(invokeMock()).toHaveBeenCalledTimes(1)
 
-    store.seedSyntaxOnlyRuns(hunkId, [2])
-    expect(store.runDecisions.get(hunkId)?.get(2)).toBe('reject')
+      store.seedSyntaxOnlyRuns(hunkId, [2])
+      expect(store.runDecisions.get(hunkId)?.get(2)).toBe('reject')
 
-    store.seedSyntaxOnlyRuns(hunkId, [0])
-    expect(store.runDecisions.get(hunkId)?.get(0)).toBe('accept')
+      store.seedSyntaxOnlyRuns(hunkId, [0])
+      expect(store.runDecisions.get(hunkId)?.get(0)).toBe('accept')
 
-    // Re-seeding the same indexes is a no-op: no entries change, and no
-    // write-back is triggered by a seed call alone.
-    store.seedSyntaxOnlyRuns(hunkId, [0, 2])
-    expect(store.runDecisions.get(hunkId)?.get(0)).toBe('accept')
-    expect(store.runDecisions.get(hunkId)?.get(2)).toBe('reject')
-    expect(invokeMock()).toHaveBeenCalledTimes(1)
+      // Re-seeding the same indexes is a no-op: no entries change, and no
+      // write-back is triggered by a seed call alone.
+      store.seedSyntaxOnlyRuns(hunkId, [0, 2])
+      expect(store.runDecisions.get(hunkId)?.get(0)).toBe('accept')
+      expect(store.runDecisions.get(hunkId)?.get(2)).toBe('reject')
+      expect(invokeMock()).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

@@ -13,6 +13,12 @@ import type { IFileState, LineEnding, SaveOptions } from '@shared/types/files'
 // set, so later writes strictly supersede earlier ones — they must not race.
 let writeChain: Promise<void> = Promise.resolve()
 
+// A run decision (US-011) coalesces rapid clicking into one write: each call
+// resets a DEBOUNCE_MS quiet-period timer, capped by a MAX_WAIT_MS backstop
+// so a long click streak can't starve the write indefinitely.
+const DEBOUNCE_MS = 400
+const MAX_WAIT_MS = 2000
+
 /**
  * The parsed on-disk document from an mt::update-file change event. Captured
  * at review entry so write-backs re-apply the file's current EOL/BOM style
@@ -105,6 +111,17 @@ interface ReviewState {
   diskMeta: ReviewChangeData | null
   writeState: ReviewWriteState
   writeError: string | null
+  /**
+   * Handles for a run decision's debounced write-back (see
+   * _scheduleDebouncedWrite). Non-null exactly when a write is scheduled but
+   * hasn't fired yet. Kept in state rather than module scope (unlike
+   * writeChain, which is one channel shared by the whole app) because they
+   * belong to this review session specifically: every path that ends or
+   * resets the session must cancel them, or a stale timer fires later using
+   * whatever session happens to be active by then.
+   */
+  pendingWriteTimer: ReturnType<typeof setTimeout> | null
+  maxWaitTimer: ReturnType<typeof setTimeout> | null
 }
 
 const initialState = (): ReviewState => ({
@@ -127,7 +144,9 @@ const initialState = (): ReviewState => ({
   editingHunkId: null,
   diskMeta: null,
   writeState: 'idle',
-  writeError: null
+  writeError: null,
+  pendingWriteTimer: null,
+  maxWaitTimer: null
 })
 
 export const useReviewStore = defineStore('review', {
@@ -236,6 +255,11 @@ export const useReviewStore = defineStore('review', {
         return false
       }
 
+      // Defensive: a prior session on this store instance should already have
+      // flushed and cleared these via exitReview, but a fresh review must
+      // never inherit a stale timer that fires mid-way through this one.
+      this._clearWriteTimers()
+
       this.$patch({
         active: true,
         tabId: tab.id,
@@ -261,7 +285,17 @@ export const useReviewStore = defineStore('review', {
       return true
     },
 
+    /**
+     * Ends the review. Fires any debounced run-write that hasn't landed on
+     * disk yet: once this resets state, nothing will ever write that
+     * decision again, so leaving it scheduled would silently drop it (the
+     * exact failure this store's debounce must not cause). _flushPendingWrite
+     * reads the pre-reset state synchronously before its first await, so it
+     * captures the outgoing decision correctly even though this method
+     * itself isn't (and isn't awaited by any of its callers).
+     */
     exitReview(): void {
+      this._flushPendingWrite()
       Object.assign(this, initialState())
     },
 
@@ -294,6 +328,10 @@ export const useReviewStore = defineStore('review', {
       if (!this.active || !this.decisions.has(hunkId)) {
         return
       }
+      // A whole-hunk action always writes immediately; cancel any run-write
+      // still waiting out its debounce window so this write covers it too,
+      // rather than leaving a stale timer to fire again after this one.
+      this._clearWriteTimers()
       this.decisions.delete(hunkId)
       if (this.lastDecidedHunkId === hunkId) {
         this.lastDecidedHunkId = null
@@ -332,6 +370,11 @@ export const useReviewStore = defineStore('review', {
         return
       }
 
+      // A hunk-level decision always writes immediately (never debounced);
+      // cancel any run-write still waiting out its window so this write
+      // covers it too, instead of a stale timer duplicating it later.
+      this._clearWriteTimers()
+
       this._applyHunkDecision(hunkId, decision)
       this._settleHunk(hunkId)
 
@@ -341,9 +384,11 @@ export const useReviewStore = defineStore('review', {
 
     /**
      * Records one edit run's decision within a hunk that has no whole-hunk
-     * decision yet. Once this fills the last of the hunk's correlated
-     * decidable runs, the hunk is fully decided — same settle + finalize
-     * treatment as a whole-hunk decide().
+     * decision yet. The write-back is debounced (US-011: _scheduleDebouncedWrite)
+     * rather than immediate, so a burst of clicks coalesces into one disk
+     * write — except when this call fully decides the review (the last
+     * decidable run of the last hunk), where finalize needs the resolved
+     * document safely on disk and so writes immediately instead.
      */
     async decideRun(hunkId: string, runIndex: number, kind: 'accept' | 'reject'): Promise<void> {
       if (!this.active || this.isHunkDecided(hunkId)) {
@@ -359,15 +404,28 @@ export const useReviewStore = defineStore('review', {
       }
       runs.set(runIndex, kind)
 
-      await this._writeResolved()
-
-      if (this.isHunkDecided(hunkId)) {
-        this._settleHunk(hunkId)
-        this._maybeFinalize()
+      if (!this.isHunkDecided(hunkId)) {
+        this._scheduleDebouncedWrite()
+        return
       }
+
+      this._settleHunk(hunkId)
+      if (this.remainingCount > 0) {
+        this._scheduleDebouncedWrite()
+        return
+      }
+
+      this._clearWriteTimers()
+      await this._writeResolved()
+      this._maybeFinalize()
     },
 
-    /** Puts one run back up for review, leaving its sibling runs' decisions intact. */
+    /**
+     * Puts one run back up for review, leaving its sibling runs' decisions
+     * intact. Debounced the same way as decideRun (US-011) — reverting is
+     * just as click-heavy as deciding, and can never itself finalize the
+     * review, so it never needs the immediate-write escape hatch.
+     */
     async revertRun(hunkId: string, runIndex: number): Promise<void> {
       if (!this.active) {
         return
@@ -380,7 +438,7 @@ export const useReviewStore = defineStore('review', {
       if (runs.size === 0) {
         this.runDecisions.delete(hunkId)
       }
-      await this._writeResolved()
+      this._scheduleDebouncedWrite()
     },
 
     /**
@@ -448,6 +506,7 @@ export const useReviewStore = defineStore('review', {
       if (!this.active || this.writeState !== 'error') {
         return
       }
+      this._clearWriteTimers()
       await this._writeResolved()
       this._maybeFinalize()
     },
@@ -487,6 +546,11 @@ export const useReviewStore = defineStore('review', {
       if (!this.active) {
         return
       }
+      // The user is asking to leave — flush a pending run-write now,
+      // regardless of which branch below runs. Dismissing the dialog and
+      // staying in review must not have silently cancelled a write with
+      // nothing left to re-trigger it.
+      this._flushPendingWrite()
       if (this.remainingCount === 0) {
         // Nothing left to decide; _maybeFinalize would have already exited,
         // but guard against being called from a stale UI state.
@@ -565,6 +629,13 @@ export const useReviewStore = defineStore('review', {
       if (!this.active) {
         return
       }
+
+      // A run decision awaiting its debounce window must reach disk before
+      // the reset below: runDecisions is wiped unconditionally on restart
+      // (never carried forward — see the comment further down), so anything
+      // still only in memory here would otherwise vanish without ever
+      // having been written.
+      await this._flushPendingWrite()
 
       const newHunks = computeHunks(this.baselineText, change.data.markdown)
       if (newHunks.length === 0) {
@@ -645,6 +716,10 @@ export const useReviewStore = defineStore('review', {
       if (!this.active || this.remainingCount === 0) {
         return
       }
+      // A bulk action always writes immediately; cancel any run-write still
+      // waiting out its debounce window so this write covers it too, instead
+      // of a stale timer duplicating it later.
+      this._clearWriteTimers()
       // Same per-hunk rule as decide(): a hunk with runs already decided by
       // hand keeps them, rather than a bulk accept/reject overwriting them
       // outright via a whole-hunk decision.
@@ -799,6 +874,55 @@ export const useReviewStore = defineStore('review', {
         this.writeState = 'error'
         this.writeError = error instanceof Error ? error.message : String(error)
       }
+    },
+
+    /**
+     * Schedules (or reschedules) a run decision's debounced write-back.
+     * Clicking again inside the DEBOUNCE_MS quiet period pushes the write
+     * out further, coalescing a rapid streak into one disk write; the
+     * MAX_WAIT_MS timer is set once per streak and is never reset, so it
+     * fires on schedule regardless of how long the streak continues.
+     */
+    _scheduleDebouncedWrite(): void {
+      if (this.pendingWriteTimer) {
+        clearTimeout(this.pendingWriteTimer)
+      }
+      if (!this.maxWaitTimer) {
+        this.maxWaitTimer = setTimeout(() => {
+          this._clearWriteTimers()
+          this._writeResolved()
+        }, MAX_WAIT_MS)
+      }
+      this.pendingWriteTimer = setTimeout(() => {
+        this._clearWriteTimers()
+        this._writeResolved()
+      }, DEBOUNCE_MS)
+    },
+
+    /** Cancels both timers of a scheduled run-write without writing anything. */
+    _clearWriteTimers(): void {
+      if (this.pendingWriteTimer) {
+        clearTimeout(this.pendingWriteTimer)
+        this.pendingWriteTimer = null
+      }
+      if (this.maxWaitTimer) {
+        clearTimeout(this.maxWaitTimer)
+        this.maxWaitTimer = null
+      }
+    },
+
+    /**
+     * Writes now if (and only if) a run decision's debounced write is still
+     * pending — the no-op case matters as much as the write itself, since
+     * every exit/restart path calls this unconditionally and must not add an
+     * extra disk write when nothing was ever scheduled.
+     */
+    async _flushPendingWrite(): Promise<void> {
+      if (!this.pendingWriteTimer && !this.maxWaitTimer) {
+        return
+      }
+      this._clearWriteTimers()
+      await this._writeResolved()
     },
 
     _maybeFinalize(): void {
