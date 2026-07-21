@@ -9,6 +9,9 @@
     <div
       class="review-document"
       :class="{ 'two-column': wide }"
+      @click="onEditAction"
+      @mouseover="onEditHover"
+      @focusin="onEditFocus"
     >
       <template
         v-for="row in renderedRows"
@@ -123,7 +126,12 @@ import { renderToStaticHTML } from '@muyajs/core'
 import { annotateMerged, computeRegions } from 'common/diff/regions'
 import { useReviewStore } from '@/store/review'
 import { applyWordMarks } from '@/util/reviewWordMarks'
-import { applyInlineMerge, isSingleParagraph } from '@/util/reviewInlineMerge'
+import {
+  applyInlineMerge,
+  correlateRuns,
+  isSingleParagraph,
+  wrapDecidableRuns
+} from '@/util/reviewInlineMerge'
 import { shouldGoWide } from '@/util/reviewLayout'
 import { t } from '../../i18n'
 import ReviewHunkControls from './reviewHunkControls.vue'
@@ -208,9 +216,16 @@ interface RenderedSegments {
 
 const renderedSegments = computed<RenderedSegments>(() => {
   const segments = computeRegions(
-    annotateMerged(reviewStore.baselineText, reviewStore.hunks, reviewStore.decisions)
+    annotateMerged(reviewStore.baselineText, reviewStore.hunks, reviewStore.effectiveDecisions())
   )
   const inlineCapable = new Set<string>()
+  // Read once per pass rather than inside the loop: t() call cost is trivial,
+  // but this keeps every run's popover on this render sharing one object.
+  const runActionLabels = {
+    keep: t('review.keepChange'),
+    undo: t('review.undoChange'),
+    edit: t('review.editParagraph')
+  }
 
   const renderedSegmentList = segments.map((segment): RenderedSegment => {
     if (segment.kind === 'unchanged') {
@@ -249,14 +264,51 @@ const renderedSegments = computed<RenderedSegments>(() => {
         const wantInline = reviewStore.viewFor(hunkId) === 'inline' && mergeable
 
         if (wantInline) {
-          applyInlineMerge(deletedEl.textContent ?? '', addedEl)
+          const hunk = reviewStore.hunks.find((candidate) => candidate.id === hunkId)
+          const deletedText = deletedEl.textContent ?? ''
+          const addedText = addedEl.textContent ?? ''
+          // Must run before applyInlineMerge, which splices <del> nodes into
+          // addedEl and so changes its textContent — correlateRuns' own
+          // reading of "the proposed text" would otherwise be wrong.
+          const correlation = hunk ? correlateRuns(hunk, deletedEl, addedEl) : null
+
+          applyInlineMerge(deletedText, addedEl)
+
+          const wrappedRunIndexes = correlation
+            ? wrapDecidableRuns(
+              hunkId,
+              deletedText,
+              addedText,
+              addedEl,
+              correlation.decidable,
+              runActionLabels
+            )
+            : []
+
           added.html = addedEl.innerHTML
           added.role = 'merged'
           parts.splice(parts.indexOf(deleted), 1)
+
+          // Only the runs that actually got a `.review-edit` wrapper are
+          // reported decidable — a run wrapDecidableRuns had to skip has no
+          // UI to decide it individually, so it must fall back to the whole
+          // hunk's Keep/Undo rather than sit permanently pending.
+          reviewStore.setDecidableRuns(hunkId, wrappedRunIndexes)
+          if (correlation) {
+            reviewStore.seedSyntaxOnlyRuns(
+              hunkId,
+              correlation.syntaxOnly.map((run) => run.index)
+            )
+          }
         } else {
           applyWordMarks(deletedEl, addedEl)
           deleted.html = deletedEl.innerHTML
           added.html = addedEl.innerHTML
+          // Clears a correlation from a previous render — e.g. the user
+          // toggled this hunk to stacked view — so isHunkDecided and
+          // _fillRemainingRuns fall back to whole-hunk behavior instead of
+          // waiting on runs that no longer have any UI to decide them.
+          reviewStore.setDecidableRuns(hunkId, [])
         }
       } catch {
         // Word marks and the merged view are progressive enhancement; on
@@ -386,6 +438,79 @@ const canToggleView = (hunkId: string): boolean => {
     : renderedSegments.value.inlineCapable.has(hunkId)
 }
 
+// Finds the `.review-edit` wrapper an event originated from. That markup is
+// injected via v-html (see wrapDecidableRuns), so it carries no Vue
+// listeners of its own — every interaction with it is handled here, on the
+// real DOM event that bubbled up from inside the rendered fragment.
+const editWrapperFrom = (event: Event): HTMLElement | null =>
+  (event.target as HTMLElement | null)?.closest<HTMLElement>('.review-edit') ?? null
+
+/**
+ * Sizes and sides a run's popover against its actual on-screen position —
+ * CSS alone shows/hides it (:hover/:focus-within), but placement needs the
+ * wrapper's real geometry, which only exists once the fragment is mounted.
+ * Flips below the wrapper when there is no room above the scroll
+ * container's own visible top (a first-line change would otherwise render
+ * its popover clipped above the viewport), and clamps horizontal centering
+ * so a change near either edge of the column keeps its popover on screen.
+ */
+const positionEditPopover = (wrapper: HTMLElement): void => {
+  const popover = wrapper.querySelector<HTMLElement>('.review-edit-popover')
+  const host = overlayRef.value
+  if (!popover || !host) {
+    return
+  }
+  const wrapperRect = wrapper.getBoundingClientRect()
+  const hostRect = host.getBoundingClientRect()
+  const popRect = popover.getBoundingClientRect()
+
+  const fitsAbove = wrapperRect.top - popRect.height - 8 >= hostRect.top
+  popover.classList.toggle('below', !fitsAbove)
+
+  const halfWidth = popRect.width / 2
+  const center = wrapperRect.left + wrapperRect.width / 2
+  const minCenter = hostRect.left + halfWidth + 4
+  const maxCenter = hostRect.right - halfWidth - 4
+  const clampedCenter = Math.min(Math.max(center, minCenter), maxCenter)
+  popover.style.setProperty('--pop-shift', `${clampedCenter - center}px`)
+}
+
+const onEditHover = (event: MouseEvent): void => {
+  const wrapper = editWrapperFrom(event)
+  if (wrapper) {
+    positionEditPopover(wrapper)
+  }
+}
+
+const onEditFocus = (event: FocusEvent): void => {
+  const wrapper = editWrapperFrom(event)
+  if (wrapper) {
+    positionEditPopover(wrapper)
+  }
+}
+
+// Delegated handler for a popover's Keep/Undo/Edit buttons — plain <button>
+// elements inside the v-html fragment, identified by the data attributes
+// wrapDecidableRuns/buildPopover stamped on them.
+const onEditAction = (event: MouseEvent): void => {
+  const button = (event.target as HTMLElement | null)?.closest<HTMLElement>('.review-edit-action')
+  if (!button) {
+    return
+  }
+  const { hunkId, reviewAct } = button.dataset
+  const runIndex = Number(button.dataset.runIndex)
+  if (!hunkId || Number.isNaN(runIndex)) {
+    return
+  }
+  if (reviewAct === 'keep') {
+    reviewStore.decideRun(hunkId, runIndex, 'accept').catch(console.error)
+  } else if (reviewAct === 'undo') {
+    reviewStore.decideRun(hunkId, runIndex, 'reject').catch(console.error)
+  } else if (reviewAct === 'edit') {
+    reviewStore.beginEdit(hunkId)
+  }
+}
+
 let resizeObserver: ResizeObserver | null = null
 let resizeFrame = 0
 
@@ -465,7 +590,17 @@ const onKeydown = (event: KeyboardEvent): void => {
     return
   }
 
-  const { key, altKey } = event
+  const { key, altKey, target } = event
+  // Enter on the wrapper itself (not a popover button, which handles its own
+  // activation) reveals the popover and moves focus into it — the wrapper's
+  // :focus-within already shows it, but a keyboard user tabbing to the
+  // wrapper has no other way to learn Keep/Undo/Edit exist there.
+  if (key === 'Enter' && target instanceof HTMLElement && target.classList.contains('review-edit')) {
+    event.preventDefault()
+    positionEditPopover(target)
+    target.querySelector<HTMLButtonElement>('.review-edit-action')?.focus()
+    return
+  }
   if (key === 'j' || (altKey && key === 'ArrowDown')) {
     event.preventDefault()
     reviewStore.focusNext()
@@ -677,6 +812,80 @@ const onKeydown = (event: KeyboardEvent): void => {
   text-decoration-color: var(--diffDeletedStroke, rgba(220, 80, 80, 0.55));
   text-decoration-thickness: 1.5px;
   padding: 0 2px;
+}
+
+/* US-008: one decidable run inside a merged paragraph. Focusable so Tab
+   reaches it; :hover/:focus-within alone reveal the popover — placement
+   (side/horizontal clamp) is the only part JS has to do, since it needs the
+   wrapper's real on-screen position (see positionEditPopover). */
+.review-document :deep(.review-edit) {
+  position: relative;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.review-document :deep(.review-edit:hover del.review-word-del),
+.review-document :deep(.review-edit:hover .review-word-add),
+.review-document :deep(.review-edit:focus-within del.review-word-del),
+.review-document :deep(.review-edit:focus-within .review-word-add) {
+  filter: saturate(1.35) brightness(0.97);
+}
+
+.review-document :deep(.review-edit-popover) {
+  display: none;
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(calc(-50% + var(--pop-shift, 0px)));
+  gap: 2px;
+  padding: 3px;
+  border-radius: 8px;
+  border: 1px solid var(--reviewCardBorder, var(--editorColor30, rgba(128, 128, 128, 0.3)));
+  background: var(--floatBgColor, var(--editorBgColor));
+  box-shadow: var(--reviewCardShadow, 0 1px 3px rgba(0, 0, 0, 0.1));
+  white-space: nowrap;
+  z-index: 6;
+}
+
+/* Set by positionEditPopover when there is no room above the scroll
+   container's own visible top (a first-line change). */
+.review-document :deep(.review-edit-popover.below) {
+  bottom: auto;
+  top: calc(100% + 6px);
+}
+
+.review-document :deep(.review-edit:hover .review-edit-popover),
+.review-document :deep(.review-edit:focus-within .review-edit-popover) {
+  display: inline-flex;
+}
+
+.review-document :deep(.review-edit-action) {
+  appearance: none;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 9px;
+  line-height: 1.4;
+  color: var(--editorColor);
+}
+
+.review-document :deep(.review-edit-action.keep:hover) {
+  background: var(--diffAddedBg, rgba(70, 180, 100, 0.14));
+}
+
+.review-document :deep(.review-edit-action.undo:hover) {
+  background: var(--diffDeletedBg, rgba(220, 80, 80, 0.14));
+}
+
+.review-document :deep(.review-edit-action.edit) {
+  color: var(--editorColor60, rgba(128, 128, 128, 0.75));
+}
+
+.review-document :deep(.review-edit-action.edit:hover) {
+  background: var(--editorColor10, rgba(128, 128, 128, 0.12));
 }
 
 /* Keep rendered fragments legible with editor-like typography. */

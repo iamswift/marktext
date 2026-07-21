@@ -139,3 +139,225 @@ export const correlateRuns = (
 
   return { decidable: contentRuns, syntaxOnly }
 }
+
+/** Labels for a decidable run's popover; supplied by the caller (i18n lives in the Vue layer) so this module can stay Pinia/i18n-free and unit-testable in isolation. */
+export interface RunActionLabels {
+  keep: string
+  undo: string
+  edit: string
+}
+
+/**
+ * One point in `addedRoot`'s document-order walk, positioned in the same
+ * offset space as `EditRun.propStart/propEnd` (the proposed text before
+ * applyInlineMerge spliced anything in). A text node occupies a range at its
+ * offset; a spliced `<del>` occupies none — insertDeletedRun anchors it
+ * against the offset that precedes it, so it is recorded as a zero-width
+ * point rather than descended into.
+ */
+interface OffsetEntry {
+  offset: number
+  textNode?: Text
+  delElement?: HTMLElement
+}
+
+const collectOffsetEntries = (root: HTMLElement): OffsetEntry[] => {
+  const entries: OffsetEntry[] = []
+  let cursor = 0
+
+  const walk = (node: Node): void => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      const text = node as Text
+      entries.push({ offset: cursor, textNode: text })
+      cursor += text.data.length
+      return
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) {
+      return
+    }
+    const element = node as HTMLElement
+    if (element.tagName === 'DEL' && element.classList.contains('review-word-del')) {
+      entries.push({ offset: cursor, delElement: element })
+      return
+    }
+    for (const child of Array.from(element.childNodes)) {
+      walk(child)
+    }
+  }
+
+  for (const child of Array.from(root.childNodes)) {
+    walk(child)
+  }
+  return entries
+}
+
+const findTextBoundary = (
+  entries: readonly OffsetEntry[],
+  offset: number
+): { node: Text; nodeOffset: number } | null => {
+  for (const entry of entries) {
+    if (!entry.textNode) {
+      continue
+    }
+    const length = entry.textNode.data.length
+    if (offset >= entry.offset && offset <= entry.offset + length) {
+      return { node: entry.textNode, nodeOffset: offset - entry.offset }
+    }
+  }
+  return null
+}
+
+const findDelAt = (entries: readonly OffsetEntry[], offset: number): HTMLElement | null =>
+  entries.find((entry) => entry.delElement !== undefined && entry.offset === offset)
+    ?.delElement ?? null
+
+const buildPopover = (
+  doc: Document,
+  hunkId: string,
+  runIndex: number,
+  labels: RunActionLabels
+): HTMLElement => {
+  const popover = doc.createElement('span')
+  popover.className = 'review-edit-popover'
+  popover.setAttribute('role', 'menu')
+
+  const addAction = (act: 'keep' | 'undo' | 'edit', label: string): void => {
+    const button = doc.createElement('button')
+    button.type = 'button'
+    button.className = `review-edit-action ${act}`
+    button.dataset.hunkId = hunkId
+    button.dataset.runIndex = String(runIndex)
+    button.dataset.reviewAct = act
+    button.title = label
+    button.textContent = label
+    popover.appendChild(button)
+  }
+
+  addAction('keep', labels.keep)
+  addAction('undo', labels.undo)
+  addAction('edit', labels.edit)
+
+  return popover
+}
+
+/**
+ * Wraps one decidable run's del+add mark pair — already spliced into
+ * `addedRoot` by applyInlineMerge — in a focusable `.review-edit` span
+ * carrying its popover. `renderedRun` supplies the offsets (in
+ * applyInlineMerge's pre-splice text space) and `sourceRun` supplies the
+ * write-back index/id the popover's buttons act on.
+ *
+ * Extracts the range and re-inserts it inside a new wrapper, rather than
+ * Range.surroundContents: surroundContents throws whenever the range's start
+ * and end boundaries sit at different nesting depths (e.g. the deletion
+ * marker sits as a direct child of the run's block while the addition mark
+ * one level deeper, inside .review-word-add) — the DOM spec calls that a
+ * "partially contained" non-Text node, and this shape hits it on nearly
+ * every real replace run, not just an edge case. extractContents() performs
+ * the same character-offset split without that restriction (it clones/closes
+ * partially-spanned ancestors as needed); insertNode() puts the collapsed
+ * range's boundary — and so the wrapper — back where the extracted content
+ * used to be.
+ */
+const wrapOneRun = (
+  addedRoot: HTMLElement,
+  entries: readonly OffsetEntry[],
+  hunkId: string,
+  sourceRun: EditRun,
+  renderedRun: EditRun,
+  labels: RunActionLabels
+): void => {
+  const doc = addedRoot.ownerDocument
+  const hasDeletion = renderedRun.delText !== ''
+  const hasAddition = renderedRun.addText !== ''
+  if (!hasDeletion && !hasAddition) {
+    throw new Error('run has neither deletion nor addition')
+  }
+
+  const range = doc.createRange()
+
+  if (hasDeletion) {
+    const delElement = findDelAt(entries, renderedRun.propStart)
+    if (!delElement) {
+      throw new Error('deleted run marker not found at expected offset')
+    }
+    range.setStartBefore(delElement)
+    if (hasAddition) {
+      const end = findTextBoundary(entries, renderedRun.propEnd)
+      if (!end) {
+        throw new Error('end boundary not found')
+      }
+      range.setEnd(end.node, end.nodeOffset)
+    } else {
+      range.setEndAfter(delElement)
+    }
+  } else {
+    const start = findTextBoundary(entries, renderedRun.propStart)
+    const end = findTextBoundary(entries, renderedRun.propEnd)
+    if (!start || !end) {
+      throw new Error('start/end boundary not found')
+    }
+    range.setStart(start.node, start.nodeOffset)
+    range.setEnd(end.node, end.nodeOffset)
+  }
+
+  const wrapper = doc.createElement('span')
+  wrapper.className = 'review-edit'
+  wrapper.tabIndex = 0
+  wrapper.dataset.runKey = sourceRun.id
+  wrapper.dataset.hunkId = hunkId
+  wrapper.dataset.runIndex = String(sourceRun.index)
+  wrapper.appendChild(range.extractContents())
+  range.insertNode(wrapper)
+  wrapper.appendChild(buildPopover(doc, hunkId, sourceRun.index, labels))
+}
+
+/**
+ * After applyInlineMerge has spliced its <del>/.review-word-add marks into
+ * `addedRoot`, wraps each of `decidable`'s del+add pairs in a focusable
+ * `.review-edit` span so the overlay can offer a per-change Keep/Undo/Edit
+ * popover on it. Returns the subset of `decidable`'s indexes that actually
+ * got a wrapper — the caller should only tell the store those are
+ * per-change decidable; a run skipped here (see wrapOneRun) has no UI to
+ * decide it individually and must fall back to the hunk's whole-hunk
+ * Keep/Undo.
+ *
+ * Re-derives the rendered runs and realigns `decidable` against them rather
+ * than reusing correlateRuns's (pre-splice) alignment, because
+ * applyInlineMerge has since mutated addedRoot's text — `deletedText`/
+ * `addedText` must be the strings captured BEFORE that call for the offsets
+ * to still land correctly.
+ */
+export const wrapDecidableRuns = (
+  hunkId: string,
+  deletedText: string,
+  addedText: string,
+  addedRoot: HTMLElement,
+  decidable: readonly EditRun[],
+  labels: RunActionLabels
+): number[] => {
+  if (decidable.length === 0 || !deletedText || !addedText) {
+    return []
+  }
+
+  const renderedRuns = computeTextRuns(hunkId, deletedText, addedText)
+  const alignment = alignRuns(decidable, renderedRuns)
+  const entries = collectOffsetEntries(addedRoot)
+
+  const wrapped: number[] = []
+  decidable.forEach((run, i) => {
+    const renderedIndex = alignment[i]
+    if (renderedIndex === null) {
+      return
+    }
+    try {
+      wrapOneRun(addedRoot, entries, hunkId, run, renderedRuns[renderedIndex], labels)
+      wrapped.push(run.index)
+    } catch {
+      // Best-effort — see wrapOneRun's doc comment. The run stays part of
+      // the merged paragraph, undecidable on its own this render.
+    }
+  })
+
+  return wrapped
+}

@@ -298,7 +298,7 @@ export const useReviewStore = defineStore('review', {
      * same bytes as deciding every run by hand: a run already settled by
      * decideRun (accept or reject) must survive a later bulk decide
      * untouched, and a whole-hunk decision recorded here would instead win
-     * outright over those per-run decisions (see `_effectiveDecisions`).
+     * outright over those per-run decisions (see `effectiveDecisions`).
      */
     async decide(hunkId: string, decision: HunkDecision): Promise<void> {
       if (!this.active || this.isHunkDecided(hunkId)) {
@@ -715,14 +715,17 @@ export const useReviewStore = defineStore('review', {
     },
 
     /**
-     * The one place runDecisions folds into the shape resolveDocument
-     * expects, so write-back and finalize never have to duplicate this
+     * The one place runDecisions folds into the shape resolveDocument (and
+     * annotateMerged — see the overlay's renderedSegments) expects, so
+     * write-back, finalize, and rendering never have to duplicate this
      * merge. A hunk with its own decision wins outright: decide() only ever
      * records one when the hunk has no correlated decidable runs (see
      * _applyHunkDecision), so this can never discard a real per-run decision
-     * in favor of a stale whole-hunk one.
+     * in favor of a stale whole-hunk one. Public (no underscore) because the
+     * overlay reads it directly — `decisions` alone omits any hunk decided
+     * entirely through per-run decisions.
      */
-    _effectiveDecisions(): Map<string, HunkDecision> {
+    effectiveDecisions(): Map<string, HunkDecision> {
       const merged = new Map(this.decisions)
       for (const [hunkId, runs] of this.runDecisions) {
         if (!merged.has(hunkId) && runs.size > 0) {
@@ -733,7 +736,7 @@ export const useReviewStore = defineStore('review', {
     },
 
     _resolvedDocument(): string {
-      return resolveDocument(this.baselineText, this.hunks, this._effectiveDecisions())
+      return resolveDocument(this.baselineText, this.hunks, this.effectiveDecisions())
     },
 
     _saveOptions(): SaveOptions {
