@@ -199,20 +199,44 @@ const collectOffsetEntries = (root: HTMLElement): OffsetEntry[] => {
   return entries
 }
 
+/**
+ * A boundary offset that falls exactly between two adjacent text nodes
+ * matches both: the end of the earlier one and the start of the later one.
+ * The end-of-node form is the wrong pick whenever that earlier node is the
+ * sole child of a mark wrapper (e.g. `.review-word-add`) — `Range.
+ * extractContents()` ranks an element's "after last child" boundary as
+ * strictly AFTER its last child's own end-of-data offset (a DOM
+ * boundary-point-comparison quirk, not a bug in extractContents), so the
+ * wrapper reads as only partially contained. It then clones the wrapper into
+ * the extracted fragment while leaving the ORIGINAL wrapper's text emptied
+ * in place — a hollow `<span class="review-word-add"></span>` surviving in
+ * the live DOM after a decision. Preferring the start-of-next-node form
+ * (nodeOffset 0) sidesteps this: that boundary sits unambiguously outside
+ * the earlier node's wrapper, so extractContents sees it as fully contained
+ * and moves it wholesale instead of splitting it.
+ */
 const findTextBoundary = (
   entries: readonly OffsetEntry[],
   offset: number
 ): { node: Text; nodeOffset: number } | null => {
+  let fallback: { node: Text; nodeOffset: number } | null = null
   for (const entry of entries) {
     if (!entry.textNode) {
       continue
     }
     const length = entry.textNode.data.length
-    if (offset >= entry.offset && offset <= entry.offset + length) {
-      return { node: entry.textNode, nodeOffset: offset - entry.offset }
+    if (offset < entry.offset || offset > entry.offset + length) {
+      continue
+    }
+    const nodeOffset = offset - entry.offset
+    if (nodeOffset === 0) {
+      return { node: entry.textNode, nodeOffset }
+    }
+    if (!fallback) {
+      fallback = { node: entry.textNode, nodeOffset }
     }
   }
-  return null
+  return fallback
 }
 
 const findDelAt = (entries: readonly OffsetEntry[], offset: number): HTMLElement | null =>
