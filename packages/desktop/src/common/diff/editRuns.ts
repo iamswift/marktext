@@ -26,13 +26,13 @@ const wordCount = (text: string): number => {
 }
 
 /**
- * Splits a hunk's word diff into edit runs, one per {@link EditRun}. Run
- * boundaries follow `labelMetrics` in summarize.ts, NOT `computeHunkMetrics`
- * in classify.ts: those two deliberately disagree. classify.ts keeps a run
- * alive across a single shared word so an incidental LCS match mid-rewrite
- * doesn't split one interrupted phrase into two; that reads right for
- * choosing inline-vs-stacked layout but would silently merge unrelated
- * word-swaps here. A decision list needs the opposite — one run per
+ * Splits a pair of plain-text strings into edit runs, one per {@link EditRun}.
+ * Run boundaries follow `labelMetrics` in summarize.ts, NOT
+ * `computeHunkMetrics` in classify.ts: those two deliberately disagree.
+ * classify.ts keeps a run alive across a single shared word so an incidental
+ * LCS match mid-rewrite doesn't split one interrupted phrase into two; that
+ * reads right for choosing inline-vs-stacked layout but would silently merge
+ * unrelated word-swaps here. A decision list needs the opposite — one run per
  * independently acceptable edit — so a run only survives an equal part that
  * carries no real word (whitespace), and resets on any equal part that does.
  * This keeps run COUNT identical to the margin card's label.
@@ -42,19 +42,18 @@ const wordCount = (text: string): number => {
  * literally present, unchanged, in both source texts at that position, so
  * omitting it would break the `text.slice(start, end) === run text`
  * invariant callers rely on for write-back.
+ *
+ * Shared by `computeEditRuns` (source lines) and review correlation (rendered
+ * DOM text) so both coordinate systems split runs identically — if they used
+ * different splitting rules, alignment between them would fail for reasons
+ * unrelated to the document itself.
  */
-export const computeEditRuns = (hunk: DiffHunk): EditRun[] => {
-  if (hunk.type !== 'replace') {
+export const computeTextRuns = (id: string, baseText: string, propText: string): EditRun[] => {
+  if (baseText === propText) {
     return []
   }
 
-  const baselineText = hunk.baselineLines.join('\n')
-  const proposedText = hunk.proposedLines.join('\n')
-  if (baselineText === proposedText) {
-    return []
-  }
-
-  const parts = diffWordsWithSpace(baselineText, proposedText)
+  const parts = diffWordsWithSpace(baseText, propText)
 
   const runs: EditRun[] = []
   let baseOffset = 0
@@ -72,7 +71,7 @@ export const computeEditRuns = (hunk: DiffHunk): EditRun[] => {
     }
     runs.push({
       index: runs.length,
-      id: `${hunk.id}:${runs.length}`,
+      id: `${id}:${runs.length}`,
       delText,
       addText,
       baseStart: runBaseStart,
@@ -115,6 +114,19 @@ export const computeEditRuns = (hunk: DiffHunk): EditRun[] => {
   flush(baseOffset, propOffset)
 
   return runs
+}
+
+/**
+ * Splits a hunk's word diff into edit runs. Delegates to {@link
+ * computeTextRuns} against the hunk's joined source lines — see that
+ * function's doc comment for the run-splitting rules.
+ */
+export const computeEditRuns = (hunk: DiffHunk): EditRun[] => {
+  if (hunk.type !== 'replace') {
+    return []
+  }
+
+  return computeTextRuns(hunk.id, hunk.baselineLines.join('\n'), hunk.proposedLines.join('\n'))
 }
 
 /**
