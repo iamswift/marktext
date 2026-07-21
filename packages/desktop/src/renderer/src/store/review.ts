@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { toRaw } from 'vue'
 import { computeHunks, normalizeText, type DiffHunk } from 'common/diff'
 import { classifyHunk, type ReviewViewKind } from 'common/diff/classify'
+import { computeEditRuns } from 'common/diff/editRuns'
 import { resolveDocument, type HunkDecision } from 'common/diff/resolve'
 import { useEditorStore } from './editor'
 import { usePreferencesStore } from './preferences'
@@ -47,6 +48,16 @@ interface ReviewState {
   hunks: DiffHunk[]
   decisions: Map<string, HunkDecision>
   /**
+   * Sub-hunk decisions, keyed by hunk id then by EditRun.index. Lets a
+   * partially-reviewed hunk (some runs accepted, some rejected, some still
+   * pending) write back correctly before the whole hunk has a decision of
+   * its own — see resolveRuns in common/diff/resolve.ts. Session-scoped for
+   * the same reason as viewOverrides: hunk ids are re-keyed on restart, so a
+   * decision keyed to a stale hunk id would silently misapply to whatever
+   * hunk now holds that id.
+   */
+  runDecisions: Map<string, Map<number, 'accept' | 'reject'>>
+  /**
    * Per-hunk hand overrides of the classified view. Session-scoped: hunk ids
    * are re-keyed whenever the review restarts, so a stale override would
    * otherwise land on an unrelated hunk.
@@ -82,6 +93,7 @@ const initialState = (): ReviewState => ({
   baselineWasUnsaved: false,
   hunks: [],
   decisions: new Map(),
+  runDecisions: new Map(),
   viewOverrides: new Map(),
   spotlightHunkId: null,
   suppressNextFocusScroll: false,
@@ -123,6 +135,17 @@ export const useReviewStore = defineStore('review', {
         const hunk = this.hunks.find((candidate) => candidate.id === hunkId)
         return hunk ? classifyHunk(hunk) : 'stacked'
       }
+    },
+    /** How many of a hunk's edit runs have neither been accepted nor rejected. */
+    pendingRunCount() {
+      return (hunkId: string): number => {
+        const hunk = this.hunks.find((candidate) => candidate.id === hunkId)
+        if (!hunk) {
+          return 0
+        }
+        const decided = this.runDecisions.get(hunkId)
+        return computeEditRuns(hunk).filter((run) => !decided?.has(run.index)).length
+      }
     }
   },
 
@@ -158,6 +181,7 @@ export const useReviewStore = defineStore('review', {
         baselineWasUnsaved: wasUnsaved,
         hunks,
         decisions: new Map(),
+        runDecisions: new Map(),
         viewOverrides: new Map(),
         spotlightHunkId: null,
         suppressNextFocusScroll: false,
@@ -249,6 +273,45 @@ export const useReviewStore = defineStore('review', {
 
       await this._writeResolved()
       this._maybeFinalize()
+    },
+
+    /**
+     * Records one edit run's decision within a hunk that has no whole-hunk
+     * decision yet. Deliberately does not touch activeHunkId,
+     * lastDecidedHunkId, or finalize — rolling per-run decisions up into
+     * hunk decided-ness is US-007's job; this action only owns the run-level
+     * record and its write-back.
+     */
+    async decideRun(hunkId: string, runIndex: number, kind: 'accept' | 'reject'): Promise<void> {
+      if (!this.active || this.decisions.has(hunkId)) {
+        return
+      }
+      if (!this.hunks.some((h) => h.id === hunkId)) {
+        return
+      }
+      let runs = this.runDecisions.get(hunkId)
+      if (!runs) {
+        runs = new Map()
+        this.runDecisions.set(hunkId, runs)
+      }
+      runs.set(runIndex, kind)
+      await this._writeResolved()
+    },
+
+    /** Puts one run back up for review, leaving its sibling runs' decisions intact. */
+    async revertRun(hunkId: string, runIndex: number): Promise<void> {
+      if (!this.active) {
+        return
+      }
+      const runs = this.runDecisions.get(hunkId)
+      if (!runs || !runs.has(runIndex)) {
+        return
+      }
+      runs.delete(runIndex)
+      if (runs.size === 0) {
+        this.runDecisions.delete(hunkId)
+      }
+      await this._writeResolved()
     },
 
     async acceptAll(): Promise<void> {
@@ -427,6 +490,11 @@ export const useReviewStore = defineStore('review', {
         proposedText: change.data.markdown,
         hunks: newHunks,
         decisions: carried,
+        // Unlike whole-hunk decisions, run decisions are NOT carried forward
+        // by contentKey — a stale run index surviving a restart could land on
+        // an unrelated edit in the re-diffed hunk, so the safer default is to
+        // make every run undecided again.
+        runDecisions: new Map(),
         // Decisions are carried across by contentKey, but views and the
         // spotlight are not: the ids they were keyed to no longer refer to the
         // same hunks.
@@ -496,8 +564,26 @@ export const useReviewStore = defineStore('review', {
       }
     },
 
+    /**
+     * The one place runDecisions folds into the shape resolveDocument
+     * expects, so write-back and finalize never have to duplicate this
+     * merge. A hunk with its own decision wins outright: decideRun already
+     * refuses to record once a hunk is decided, but a hunk can still pick up
+     * a whole-hunk decision (e.g. acceptAll) while pending runs linger from
+     * before, and those must not resurface as a stale 'runs' decision.
+     */
+    _effectiveDecisions(): Map<string, HunkDecision> {
+      const merged = new Map(this.decisions)
+      for (const [hunkId, runs] of this.runDecisions) {
+        if (!merged.has(hunkId) && runs.size > 0) {
+          merged.set(hunkId, { kind: 'runs', runs: new Map(runs) })
+        }
+      }
+      return merged
+    },
+
     _resolvedDocument(): string {
-      return resolveDocument(this.baselineText, this.hunks, this.decisions)
+      return resolveDocument(this.baselineText, this.hunks, this._effectiveDecisions())
     },
 
     _saveOptions(): SaveOptions {
